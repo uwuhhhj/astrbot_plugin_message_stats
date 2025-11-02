@@ -4,11 +4,11 @@
 """
 
 import re
-import logging
 from typing import Any, Optional, List, Dict
 from datetime import datetime, date
+from astrbot.api import logger as astrbot_logger
 
-logger = logging.getLogger('message_stats_plugin')
+
 
 
 class ValidationError(Exception):
@@ -18,6 +18,8 @@ class ValidationError(Exception):
 
 class Validators:
     """验证器集合"""
+    
+    logger = astrbot_logger
     
     @staticmethod
     def validate_group_id(group_id: Any) -> str:
@@ -202,7 +204,7 @@ class Validators:
 
                 else:
                     # 未知配置项，记录警告但继续处理
-                    logger.warning(f"未知配置项: {key}")
+                    Validators.logger.warning(f"未知配置项: {key}")
                     validated_updates[key] = value
             
             except ValidationError as e:
@@ -230,50 +232,115 @@ class Validators:
         if not content:
             return ""
         
-        # 移除危险标签
-        dangerous_tags = ['script', 'object', 'embed', 'link', 'style', 'iframe', 'frame', 'frameset']
+        try:
+            # 尝试使用bleach库进行安全的HTML清理
+            import bleach
+            
+            # 定义允许的标签和属性
+            allowed_tags = ['p', 'br', 'strong', 'em', 'u', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+                          'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'span', 'div']
+            allowed_attributes = {
+                '*': ['class'],
+                'a': ['href', 'title'],
+                'img': ['src', 'alt', 'title']
+            }
+            allowed_protocols = ['http', 'https', 'mailto']
+            
+            # 清理HTML内容
+            cleaned_content = bleach.clean(
+                content,
+                tags=allowed_tags,
+                attributes=allowed_attributes,
+                protocols=allowed_protocols,
+                strip=True
+            )
+            
+            return cleaned_content.strip()
+            
+        except ImportError:
+            # 如果bleach不可用，使用改进的正则表达式方法
+            Validators._fallback_html_sanitize(content)
+    
+    @staticmethod
+    def _fallback_html_sanitize(content: str) -> str:
+        """备选HTML清理方法（当bleach不可用时）"""
+        if not content:
+            return ""
+        
+        # 移除危险标签（更严格的正则表达式）
+        dangerous_tags = [
+            'script', 'object', 'embed', 'link', 'style', 'iframe', 'frame', 'frameset',
+            'meta', 'base', 'head', 'html', 'body', 'form', 'input', 'button', 'select',
+            'textarea', 'video', 'audio', 'source', 'canvas', 'svg', 'math'
+        ]
         
         for tag in dangerous_tags:
-            pattern = f'<{tag}[^>]*>.*?</{tag}>'
+            # 更严格的标签匹配，包括自闭合标签
+            pattern = f'<{tag}[^>]*>.*?</{tag}>|<{tag}[^>]*/?>'
             content = re.sub(pattern, '', content, flags=re.IGNORECASE | re.DOTALL)
         
-        # 移除危险属性
-        dangerous_attrs = ['onclick', 'ondblclick', 'onmousedown', 'onmouseup', 'onmouseover', 
-                          'onmousemove', 'onmouseout', 'onkeypress', 'onkeydown', 'onkeyup',
-                          'onload', 'onunload', 'onfocus', 'onblur', 'onchange', 'onsubmit']
+        # 移除危险属性（更全面的事件处理器列表）
+        dangerous_attrs = [
+            'onclick', 'ondblclick', 'onmousedown', 'onmouseup', 'onmouseover', 
+            'onmousemove', 'onmouseout', 'onkeypress', 'onkeydown', 'onkeyup',
+            'onload', 'onunload', 'onfocus', 'onblur', 'onchange', 'onsubmit',
+            'onabort', 'onerror', 'onresize', 'onscroll', 'onselect', 'onreset'
+        ]
         
         for attr in dangerous_attrs:
             pattern = f'{attr}\\s*=\\s*["\'][^"\']*["\']'
             content = re.sub(pattern, '', content, flags=re.IGNORECASE)
         
+        # 移除javascript:协议
+        content = re.sub(r'javascript:[^"\']*["\']?', '', content, flags=re.IGNORECASE)
+        
+        # 移除data:协议（除了图片）
+        content = re.sub(r'data:[^"\']*(?!image/)["\']?', '', content, flags=re.IGNORECASE)
+        
         return content.strip()
     
     @staticmethod
-    def validate_file_path(file_path: str, allowed_extensions: Optional[List[str]] = None) -> str:
-        """验证文件路径"""
+    def validate_file_path(file_path: str, allowed_extensions: Optional[List[str]] = None, 
+                          allowed_base_path: Optional[str] = None) -> str:
+        """验证文件路径（白名单方式）"""
         if not file_path:
             raise ValidationError("文件路径不能为空")
         
-        file_path = file_path.strip()
+        import os
+        
+        # 规范化路径
+        try:
+            normalized_path = os.path.abspath(file_path)
+        except (OSError, ValueError) as e:
+            raise ValidationError(f"文件路径无效: {e}")
         
         # 检查路径长度
-        if len(file_path) > 500:
+        if len(normalized_path) > 500:
             raise ValidationError("文件路径过长")
         
-        # 检查危险字符
-        dangerous_chars = ['..', '<', '>', ':', '"', '|', '?', '*']
+        # 检查是否包含危险字符（更严格的检查）
+        dangerous_chars = ['..', '<', '>', ':', '"', '|', '?', '*', '\x00', '\x0a', '\x0d']
         for char in dangerous_chars:
-            if char in file_path:
+            if char in normalized_path:
                 raise ValidationError(f"文件路径包含危险字符: {char}")
+        
+        # 白名单检查：如果指定了允许的基础路径
+        if allowed_base_path:
+            try:
+                allowed_abs_path = os.path.abspath(allowed_base_path)
+                # 确保路径在允许的目录内
+                if not normalized_path.startswith(allowed_abs_path + os.sep) and normalized_path != allowed_abs_path:
+                    raise ValidationError("文件路径超出允许的目录范围")
+            except (OSError, ValueError):
+                raise ValidationError("允许的基础路径无效")
         
         # 检查扩展名
         if allowed_extensions:
-            import os
-            _, ext = os.path.splitext(file_path.lower())
+            _, ext = os.path.splitext(normalized_path.lower())
             if ext not in [ext.lower() for ext in allowed_extensions]:
                 raise ValidationError(f"文件类型不支持，允许的类型: {', '.join(allowed_extensions)}")
         
-        return file_path
+        return normalized_path
     
     @staticmethod
     def validate_json_data(data: Any, required_fields: Optional[List[str]] = None) -> Dict[str, Any]:

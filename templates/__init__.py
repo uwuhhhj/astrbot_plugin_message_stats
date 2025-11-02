@@ -4,6 +4,7 @@ HTML模板模块
 """
 
 from pathlib import Path
+from astrbot.api import logger as logger
 
 # 模板文件路径
 TEMPLATE_DIR = Path(__file__).parent
@@ -18,7 +19,8 @@ def get_rank_template() -> str:
         else:
             # 返回默认模板
             return get_default_template()
-    except Exception:
+    except (IOError, UnicodeDecodeError) as e:
+        logger.warning(f"读取模板文件失败: {e}")
         return get_default_template()
 
 def get_default_template() -> str:

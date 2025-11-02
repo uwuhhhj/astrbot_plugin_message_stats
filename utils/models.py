@@ -4,10 +4,12 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, date
-from typing import List, Optional, Dict, Any
+from datetime import datetime, date, timedelta
+from typing import List, Optional, Dict, Any, AsyncGenerator
 from enum import Enum
 import json
+import aiofiles
+import os
 
 
 class RankType(Enum):
@@ -133,14 +135,14 @@ class UserData:
 @dataclass
 class PluginConfig:
     """插件配置"""
-    is_arr: int = 0
+    is_admin_restricted: int = 0
     rand: int = 20
     if_send_pic: int = 1
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
-            "is_arr": self.is_arr,
+            "is_admin_restricted": self.is_admin_restricted,
             "rand": self.rand,
             "if_send_pic": self.if_send_pic
         }
@@ -149,7 +151,7 @@ class PluginConfig:
     def from_dict(cls, data: Dict[str, Any]) -> 'PluginConfig':
         """从字典创建"""
         return cls(
-            is_arr=data.get("is_arr", 0),
+            is_admin_restricted=data.get("is_admin_restricted", 0),
             rand=data.get("rand", 20),
             if_send_pic=data.get("if_send_pic", 1)
         )
@@ -192,23 +194,26 @@ class RankData:
 
 
 # 工具函数
-def load_json_file(file_path: str) -> Optional[Dict[str, Any]]:
-    """安全加载JSON文件"""
+
+
+async def load_json_file(file_path: str) -> Optional[Dict[str, Any]]:
+    """异步安全加载JSON文件"""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, IOError):
+        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            content = await f.read()
+            return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError, IOError, OSError):
         return None
 
 
-def save_json_file(file_path: str, data: Dict[str, Any]) -> bool:
-    """安全保存JSON文件"""
+async def save_json_file(file_path: str, data: Dict[str, Any]) -> bool:
+    """异步安全保存JSON文件"""
     try:
-        import os
+        # 确保目录存在
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(data, ensure_ascii=False, indent=2))
         return True
     except (IOError, OSError) as e:
         print(f"保存文件失败: {e}")
@@ -245,6 +250,3 @@ def is_same_week(date1: date, date2: date) -> bool:
 def is_same_month(date1: date, date2: date) -> bool:
     """判断是否是同一月"""
     return date1.year == date2.year and date1.month == date2.month
-
-
-from datetime import timedelta

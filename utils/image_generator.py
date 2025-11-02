@@ -4,23 +4,24 @@
 """
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import tempfile
 import os
 
+from astrbot.api import logger as astrbot_logger
+
 try:
     from playwright.async_api import async_playwright, Browser, Page
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    logging.warning("Playwright未安装，图片生成功能将不可用")
+    astrbot_logger.warning("Playwright未安装，图片生成功能将不可用")
 
 from .models import UserData, GroupInfo, PluginConfig
 
-logger = logging.getLogger('message_stats_plugin')
+
 
 
 class ImageGenerationError(Exception):
@@ -36,6 +37,7 @@ class ImageGenerator:
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
         self.playwright = None
+        self.logger = astrbot_logger
         
         # 图片生成配置
         self.width = 1200
@@ -48,13 +50,13 @@ class ImageGenerator:
     async def initialize(self):
         """初始化图片生成器"""
         if not PLAYWRIGHT_AVAILABLE:
-            logger.error("Playwright未安装，图片生成功能将不可用")
+            self.logger.error("Playwright未安装，图片生成功能将不可用")
             raise ImageGenerationError("Playwright未安装，无法生成图片")
         
         try:
-            logger.info("开始初始化图片生成器...")
+            self.logger.info("开始初始化图片生成器...")
             self.playwright = await async_playwright().start()
-            logger.info("Playwright启动成功")
+            self.logger.info("Playwright启动成功")
             
             self.browser = await self.playwright.chromium.launch(
                 headless=True,
@@ -68,17 +70,13 @@ class ImageGenerator:
                     "--disable-extensions"
                 ]
             )
-            logger.info("Chromium浏览器启动成功")
+            self.logger.info("Chromium浏览器启动成功")
             
-            logger.info("图片生成器初始化完成")
+            self.logger.info("图片生成器初始化完成")
         except Exception as e:
-            logger.error(f"初始化图片生成器失败: {e}")
+            self.logger.error(f"初始化图片生成器失败: {e}")
             import traceback
-            logger.error(f"详细错误: {traceback.format_exc()}")
-            raise ImageGenerationError(f"初始化失败: {e}")
-        
-        except Exception as e:
-            logger.error(f"初始化图片生成器失败: {e}")
+            self.logger.error(f"详细错误: {traceback.format_exc()}")
             raise ImageGenerationError(f"初始化失败: {e}")
     
     async def cleanup(self):
@@ -96,10 +94,10 @@ class ImageGenerator:
                 await self.playwright.stop()
                 self.playwright = None
             
-            logger.info("图片生成器资源已清理")
+            self.logger.info("图片生成器资源已清理")
         
         except Exception as e:
-            logger.error(f"清理图片生成器资源失败: {e}")
+            self.logger.error(f"清理图片生成器资源失败: {e}")
     
     async def generate_rank_image(self, 
                                  users: List[UserData], 
@@ -107,65 +105,65 @@ class ImageGenerator:
                                  title: str,
                                  current_user_id: Optional[str] = None) -> str:
         """生成排行榜图片"""
-        logger.info(f"开始生成排行榜图片: {title}")
-        logger.info(f"用户数据: {len(users)} 个用户")
+        self.logger.info(f"开始生成排行榜图片: {title}")
+        self.logger.info(f"用户数据: {len(users)} 个用户")
         
         if not self.browser:
-            logger.info("浏览器未初始化，开始初始化...")
+            self.logger.info("浏览器未初始化，开始初始化...")
             await self.initialize()
         
         try:
-            logger.info("创建新页面...")
+            self.logger.info("创建新页面...")
             # 创建页面
             self.page = await self.browser.new_page()
-            logger.info("页面创建成功")
+            self.logger.info("页面创建成功")
             
             # 设置视口
-            logger.info(f"设置视口大小: {self.width}x{self.viewport_height}")
+            self.logger.info(f"设置视口大小: {self.width}x{self.viewport_height}")
             await self.page.set_viewport_size({"width": self.width, "height": self.viewport_height})
             
             # 生成HTML内容
-            logger.info("生成HTML内容...")
+            self.logger.info("生成HTML内容...")
             html_content = self._generate_html(users, group_info, title, current_user_id)
-            logger.info(f"HTML内容生成成功，长度: {len(html_content)}")
+            self.logger.info(f"HTML内容生成成功，长度: {len(html_content)}")
             
             # 设置页面内容
-            logger.info("设置页面内容...")
+            self.logger.info("设置页面内容...")
             await self.page.set_content(html_content, wait_until="networkidle")
             
             # 等待页面加载完成
-            logger.info("等待页面加载完成...")
+            self.logger.info("等待页面加载完成...")
             await self.page.wait_for_timeout(2000)
             
             # 动态调整页面高度
-            logger.info("获取页面高度...")
+            self.logger.info("获取页面高度...")
             body_height = await self.page.evaluate("document.body.scrollHeight")
-            logger.info(f"页面高度: {body_height}")
+            self.logger.info(f"页面高度: {body_height}")
             await self.page.set_viewport_size({"width": self.width, "height": body_height})
             
             # 生成临时文件路径
-            logger.info("生成临时文件路径...")
+            self.logger.info("生成临时文件路径...")
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
                 temp_path = temp_file.name
-            logger.info(f"临时文件路径: {temp_path}")
+            self.logger.info(f"临时文件路径: {temp_path}")
             
             # 截图
-            logger.info("开始截图...")
+            self.logger.info("开始截图...")
             await self.page.screenshot(path=temp_path, full_page=True)
-            logger.info(f"截图完成: {temp_path}")
+            self.logger.info(f"截图完成: {temp_path}")
             
-            logger.info(f"排行榜图片生成成功: {temp_path}")
+            self.logger.info(f"排行榜图片生成成功: {temp_path}")
             return temp_path
         
         except Exception as e:
-            logger.error(f"生成排行榜图片失败: {e}")
+            self.logger.error(f"生成排行榜图片失败: {e}")
             import traceback
-            logger.error(f"详细错误: {traceback.format_exc()}")
+            self.logger.error(f"详细错误: {traceback.format_exc()}")
             raise ImageGenerationError(f"生成图片失败: {e}")
         
         finally:
             if self.page:
-                logger.info("关闭页面...")
+                self.logger.info("关闭页面...")
                 await self.page.close()
                 self.page = None
     
@@ -381,22 +379,22 @@ class ImageGenerator:
     def _load_html_template(self) -> str:
         """加载HTML模板"""
         try:
-            logger.info(f"加载HTML模板: {self.template_path}")
+            self.logger.info(f"加载HTML模板: {self.template_path}")
             if self.template_path.exists():
-                logger.info("模板文件存在，开始读取...")
+                self.logger.info("模板文件存在，开始读取...")
                 with open(self.template_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                logger.info(f"模板读取成功，长度: {len(content)}")
+                self.logger.info(f"模板读取成功，长度: {len(content)}")
                 return content
             else:
-                logger.warning(f"模板文件不存在: {self.template_path}")
+                self.logger.warning(f"模板文件不存在: {self.template_path}")
                 # 使用内置模板
-                logger.info("使用默认内置模板")
+                self.logger.info("使用默认内置模板")
                 return self._get_default_template()
         except Exception as e:
-            logger.error(f"加载HTML模板失败: {e}")
+            self.logger.error(f"加载HTML模板失败: {e}")
             import traceback
-            logger.error(f"详细错误: {traceback.format_exc()}")
+            self.logger.error(f"详细错误: {traceback.format_exc()}")
             return self._get_default_template()
     
     def _get_default_template(self) -> str:
@@ -557,7 +555,7 @@ class ImageGenerator:
             return title == "Test"
         
         except Exception as e:
-            logger.error(f"测试浏览器连接失败: {e}")
+            self.logger.error(f"测试浏览器连接失败: {e}")
             return False
     
     async def get_browser_info(self) -> Dict[str, Any]:

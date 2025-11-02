@@ -4,14 +4,14 @@ AstrBot 群发言统计插件
 """
 
 import asyncio
-import logging
 import json
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timedelta
+from cachetools import TTLCache
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, MessageChain
 from astrbot.api.event.filter import EventMessageType
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger as astrbot_logger
 import astrbot.api.message_components as Comp
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
@@ -24,13 +24,7 @@ from .utils.models import (
     RankType
 )
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    force=True
-)
-logger = logging.getLogger('message_stats_plugin')
+
 
 
 @register("message_stats", "xiaoruange39", "群发言统计插件", "1.0")
@@ -39,30 +33,20 @@ class MessageStatsPlugin(Star):
     
     def __init__(self, context: Context, config = None):
         super().__init__(context)
-        self.logger = logger
+        self.logger = astrbot_logger
         
-        # 获取插件目录路径
-        import os
-        plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        data_dir = os.path.join(plugin_dir, "data")
-        
-        # 初始化AstrBot配置
-        from astrbot.api import AstrBotConfig
-        self.plugin_config = config or AstrBotConfig()
+        # 使用StarTools获取插件数据目录
+        data_dir = StarTools.get_data_dir('message_stats')
         
         # 初始化组件
         self.data_manager = DataManager(data_dir)
         
-        # 创建插件配置对象
-        rand = self.plugin_config.get("rand", 20)
-        if_send_pic = self.plugin_config.get("if_send_pic", 1)
+        # 插件配置将在初始化时从DataManager获取
+        self.plugin_config = None
+        self.image_generator = None
         
-        plugin_config = PluginConfig(
-            rand=rand,
-            if_send_pic=if_send_pic
-        )
-        
-        self.image_generator = ImageGenerator(plugin_config)
+        # 群成员列表缓存 - 5分钟TTL，减少API调用
+        self.group_members_cache = TTLCache(maxsize=100, ttl=300)
         
         # 插件状态
         self.initialized = False
@@ -74,6 +58,12 @@ class MessageStatsPlugin(Star):
             
             # 初始化数据管理器
             await self.data_manager.initialize()
+            
+            # 从DataManager获取插件配置（确保config.json存在，如果不存在则创建默认配置）
+            self.plugin_config = await self.data_manager.get_config()
+            
+            # 创建图片生成器
+            self.image_generator = ImageGenerator(self.plugin_config)
             
             # 初始化图片生成器
             try:
@@ -95,10 +85,15 @@ class MessageStatsPlugin(Star):
             self.logger.info("群发言统计插件卸载中...")
             
             # 清理图片生成器
-            await self.image_generator.cleanup()
+            if self.image_generator:
+                await self.image_generator.cleanup()
             
             # 清理数据缓存
             await self.data_manager.clear_cache()
+            
+            # 清理群成员列表缓存
+            self.group_members_cache.clear()
+            self.logger.info("群成员列表缓存已清理")
             
             self.initialized = False
             self.logger.info("群发言统计插件卸载完成")
@@ -344,6 +339,58 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"清除榜单失败: {e}")
             yield event.plain_result("清除榜单失败，请稍后重试！")
     
+    @filter.command("刷新群成员缓存")
+    async def refresh_group_members_cache(self, event: AstrMessageEvent):
+        """刷新群成员列表缓存"""
+        try:
+            group_id = event.get_group_id()
+            if not group_id:
+                yield event.plain_result("无法获取群组信息，请在群聊中使用此命令！")
+                return
+            group_id = str(group_id)
+            
+            # 清除特定群的成员缓存
+            cache_key = f"group_members_{group_id}"
+            if cache_key in self.group_members_cache:
+                del self.group_members_cache[cache_key]
+                self.logger.info(f"已清除群 {group_id} 的成员缓存")
+                yield event.plain_result("群成员缓存已刷新！")
+            else:
+                yield event.plain_result("该群没有缓存的成员信息！")
+            
+        except Exception as e:
+            self.logger.error(f"刷新群成员缓存失败: {e}")
+            yield event.plain_result("刷新缓存失败，请稍后重试！")
+    
+    @filter.command("缓存状态")
+    async def show_cache_status(self, event: AstrMessageEvent):
+        """显示缓存状态"""
+        try:
+            # 获取数据管理器缓存统计
+            cache_stats = await self.data_manager.get_cache_stats()
+            
+            # 获取群成员缓存信息
+            members_cache_size = len(self.group_members_cache)
+            members_cache_maxsize = self.group_members_cache.maxsize
+            
+            status_msg = [
+                "📊 缓存状态报告",
+                "━━━━━━━━━━━━━━",
+                f"💾 数据缓存: {cache_stats['data_cache_size']}/{cache_stats['data_cache_maxsize']}",
+                f"⚙️ 配置缓存: {cache_stats['config_cache_size']}/{cache_stats['config_cache_maxsize']}",
+                f"👥 群成员缓存: {members_cache_size}/{members_cache_maxsize}",
+                "━━━━━━━━━━━━━━",
+                "🕐 数据缓存TTL: 5分钟",
+                "🕐 配置缓存TTL: 1分钟", 
+                "🕐 群成员缓存TTL: 5分钟"
+            ]
+            
+            yield event.plain_result('\n'.join(status_msg))
+            
+        except Exception as e:
+            self.logger.error(f"显示缓存状态失败: {e}")
+            yield event.plain_result("获取缓存状态失败，请稍后重试！")
+    
     # ========== 私有方法 ==========
     
     async def _get_user_display_name(self, event: AstrMessageEvent, group_id: str, user_id: str) -> str:
@@ -358,10 +405,31 @@ class MessageStatsPlugin(Star):
                 except Exception:
                     return f"用户{user_id}"
             
-            # 获取群成员列表
-            client = event.bot
-            params = {"group_id": group_id}
-            members_info = await client.api.call_action('get_group_member_list', **params)
+            # 检查群成员列表缓存
+            cache_key = f"group_members_{group_id}"
+            members_info = None
+            
+            if cache_key in self.group_members_cache:
+                self.logger.debug(f"从缓存获取群 {group_id} 成员列表")
+                members_info = self.group_members_cache[cache_key]
+            else:
+                # 缓存未命中，获取群成员列表
+                self.logger.debug(f"获取群 {group_id} 成员列表并缓存")
+                client = event.bot
+                params = {"group_id": group_id}
+                try:
+                    members_info = await client.api.call_action('get_group_member_list', **params)
+                    if members_info:
+                        # 缓存群成员列表，设置合理的过期时间
+                        self.group_members_cache[cache_key] = members_info
+                        self.logger.debug(f"已缓存群 {group_id} 成员列表，共 {len(members_info)} 个成员")
+                        
+                        # 对于大群（成员数>500），记录警告
+                        if len(members_info) > 500:
+                            self.logger.warning(f"群 {group_id} 成员数较多（{len(members_info)}），建议调整缓存策略")
+                except Exception as e:
+                    self.logger.warning(f"获取群成员列表失败: {e}")
+                    members_info = None
             
             if not members_info:
                 # 如果无法获取群成员列表，回退到原有方式
@@ -371,13 +439,30 @@ class MessageStatsPlugin(Star):
                 except Exception:
                     return f"用户{user_id}"
             
-            # 在群成员列表中查找当前用户
-            for member in members_info:
-                if str(member.get("user_id", "")) == user_id:
+            # 优化大量群成员处理：使用字典查找替代列表遍历
+            try:
+                # 创建用户ID到成员信息的快速查找字典
+                members_dict = {}
+                for member in members_info:
+                    member_user_id = str(member.get("user_id", ""))
+                    if member_user_id:
+                        members_dict[member_user_id] = member
+                
+                # 快速查找当前用户
+                if user_id in members_dict:
+                    member = members_dict[user_id]
                     # 优先使用群昵称(card)，其次使用QQ昵称(nickname)
                     display_name = member.get("card") or member.get("nickname")
                     if display_name:
                         return display_name
+            except Exception as e:
+                self.logger.warning(f"优化查找失败，回退到列表遍历: {e}")
+                # 回退到原有的列表遍历方式
+                for member in members_info:
+                    if str(member.get("user_id", "")) == user_id:
+                        display_name = member.get("card") or member.get("nickname")
+                        if display_name:
+                            return display_name
             
             # 如果在群成员列表中未找到，回退到原有方式
             try:
@@ -505,34 +590,36 @@ class MessageStatsPlugin(Star):
             yield event.plain_result("生成排行榜失败，请稍后重试")
     
     async def _filter_data_by_rank_type(self, group_data: List[UserData], rank_type: RankType) -> List[UserData]:
-        """根据排行榜类型筛选数据"""
+        """根据排行榜类型筛选数据并计算时间段内的发言次数"""
         current_date = datetime.now().date()
         
         if rank_type == RankType.TOTAL:
             return group_data
         
         elif rank_type == RankType.DAILY:
-            # 筛选今日有发言的用户
+            # 计算今日发言次数
             filtered_users = []
             for user in group_data:
                 if not user.history:
                     continue
                 
-                last_date = user.get_last_message_date()
-                if not last_date:
-                    continue
-                
-                try:
-                    last_date_obj = last_date.to_date()
-                    if last_date_obj == current_date:
-                        filtered_users.append(user)
-                except (ValueError, AttributeError):
-                    continue
+                # 计算今日发言次数
+                today_count = user.get_message_count_in_period(current_date, current_date)
+                if today_count > 0:
+                    # 创建新的UserData对象，仅包含今日发言数
+                    new_user = UserData(
+                        user_id=user.user_id,
+                        nickname=user.nickname,
+                        total=today_count,
+                        history=[],  # 不需要历史记录
+                        last_date=user.last_date
+                    )
+                    filtered_users.append(new_user)
             
             return filtered_users
         
         elif rank_type == RankType.WEEKLY:
-            # 筛选本周有发言的用户
+            # 计算本周发言次数
             filtered_users = []
             
             # 获取本周开始日期（周一）
@@ -543,37 +630,44 @@ class MessageStatsPlugin(Star):
                 if not user.history:
                     continue
                 
-                last_date = user.get_last_message_date()
-                if not last_date:
-                    continue
-                
-                try:
-                    last_date_obj = last_date.to_date()
-                    if week_start <= last_date_obj <= current_date:
-                        filtered_users.append(user)
-                except (ValueError, AttributeError):
-                    continue
+                # 计算本周发言次数
+                week_count = user.get_message_count_in_period(week_start, current_date)
+                if week_count > 0:
+                    # 创建新的UserData对象，仅包含本周发言数
+                    new_user = UserData(
+                        user_id=user.user_id,
+                        nickname=user.nickname,
+                        total=week_count,
+                        history=[],  # 不需要历史记录
+                        last_date=user.last_date
+                    )
+                    filtered_users.append(new_user)
             
             return filtered_users
         
         elif rank_type == RankType.MONTHLY:
-            # 筛选本月有发言的用户
+            # 计算本月发言次数
             filtered_users = []
+            
+            # 获取本月开始日期
+            month_start = current_date.replace(day=1)
+            
             for user in group_data:
                 if not user.history:
                     continue
                 
-                last_date = user.get_last_message_date()
-                if not last_date:
-                    continue
-                
-                try:
-                    last_date_obj = last_date.to_date()
-                    if (last_date_obj.year == current_date.year and 
-                        last_date_obj.month == current_date.month):
-                        filtered_users.append(user)
-                except (ValueError, AttributeError):
-                    continue
+                # 计算本月发言次数
+                month_count = user.get_message_count_in_period(month_start, current_date)
+                if month_count > 0:
+                    # 创建新的UserData对象，仅包含本月发言数
+                    new_user = UserData(
+                        user_id=user.user_id,
+                        nickname=user.nickname,
+                        total=month_count,
+                        history=[],  # 不需要历史记录
+                        last_date=user.last_date
+                    )
+                    filtered_users.append(new_user)
             
             return filtered_users
         
