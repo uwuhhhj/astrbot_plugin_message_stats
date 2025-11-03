@@ -1,13 +1,17 @@
 """
 数据模型定义
 定义插件中使用的所有数据结构
+
+此模块仅包含数据模型的定义，不包含业务逻辑或工具函数。
+工具函数已拆分到独立的模块中：
+- file_utils: 文件操作工具
+- date_utils: 日期时间处理工具
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, date, timedelta
-from typing import List, Optional, Dict, Any, AsyncGenerator
+from datetime import datetime, date
+from typing import List, Optional, Dict, Any
 from enum import Enum
-import os
 
 
 
@@ -511,164 +515,3 @@ class RankData:
             "total_messages": self.total_messages,
             "generated_at": self.generated_at.isoformat()
         }
-
-
-# 工具函数
-import json
-import aiofiles
-import asyncio
-
-
-async def load_json_file(file_path: str) -> Dict[str, Any]:
-    """异步加载JSON文件
-    
-    异步读取JSON文件并解析内容。
-    
-    Args:
-        file_path (str): JSON文件路径
-        
-    Returns:
-        Dict[str, Any]: 解析后的字典数据
-        
-    Raises:
-        FileNotFoundError: 当文件不存在时
-        json.JSONDecodeError: 当JSON格式错误时
-        IOError: 当文件读取失败时
-        OSError: 当系统操作失败时
-        
-    Example:
-        >>> data = await load_json_file("config.json")
-        >>> print(f"加载成功，包含 {len(data)} 个键")
-    """
-    async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
-        content = await f.read()
-        return json.loads(content)
-
-
-async def save_json_file(file_path: str, data: Dict[str, Any]) -> None:
-    """异步保存JSON文件
-    
-    异步将字典数据保存为JSON文件，自动创建必要的目录结构。
-    
-    Args:
-        file_path (str): JSON文件保存路径
-        data (Dict[str, Any]): 要保存的数据字典
-        
-    Raises:
-        IOError: 当文件写入失败时
-        OSError: 当文件系统操作失败时
-        
-    Example:
-        >>> data = {"name": "测试", "value": 123}
-        >>> await save_json_file("output.json", data)
-        >>> print("保存完成")
-    """
-    # 确保目录存在（异步版本，避免阻塞事件循环）
-    await asyncio.to_thread(os.makedirs, os.path.dirname(file_path), exist_ok=True)
-    
-    async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
-        await f.write(json.dumps(data, ensure_ascii=False, indent=2))
-
-
-def get_current_date() -> MessageDate:
-    """获取当前日期
-    
-    返回表示当前日期的MessageDate对象。
-    
-    Returns:
-        MessageDate: 当前日期的MessageDate对象
-        
-    Example:
-        >>> today = get_current_date()
-        >>> print(today.year, today.month, today.day)
-        2024 1 15
-    """
-    now = datetime.now()
-    return MessageDate.from_datetime(now)
-
-
-def get_week_start(date_obj: date) -> date:
-    """获取周开始日期（周一）
-    
-    计算给定日期所在周的周一日期。
-    
-    Args:
-        date_obj (date): 任意日期对象
-        
-    Returns:
-        date: 该日期所在周的周一日期
-        
-    Example:
-        >>> from datetime import date
-        >>> d = date(2024, 1, 15)  # 周一
-        >>> week_start = get_week_start(d)
-        >>> print(week_start)
-        2024-01-15
-    """
-    days_since_monday = date_obj.weekday()
-    return date_obj - timedelta(days=days_since_monday)
-
-
-def get_month_start(date_obj: date) -> date:
-    """获取月开始日期
-    
-    计算给定日期所在月的月初日期（1号）。
-    
-    Args:
-        date_obj (date): 任意日期对象
-        
-    Returns:
-        date: 该日期所在月的月初日期
-        
-    Example:
-        >>> from datetime import date
-        >>> d = date(2024, 1, 15)
-        >>> month_start = get_month_start(d)
-        >>> print(month_start)
-        2024-01-01
-    """
-    return date_obj.replace(day=1)
-
-
-def is_same_week(date1: date, date2: date) -> bool:
-    """判断是否是同一周
-    
-    比较两个日期是否在同一周内（以周一为一周的开始）。
-    
-    Args:
-        date1 (date): 第一个日期
-        date2 (date): 第二个日期
-        
-    Returns:
-        bool: 如果在同一周返回True，否则返回False
-        
-    Example:
-        >>> from datetime import date
-        >>> d1 = date(2024, 1, 15)  # 周一
-        >>> d2 = date(2024, 1, 21)  # 周日
-        >>> print(is_same_week(d1, d2))
-        True
-    """
-    return get_week_start(date1) == get_week_start(date2)
-
-
-def is_same_month(date1: date, date2: date) -> bool:
-    """判断是否是同一月
-    
-    比较两个日期是否在同一月内。
-    
-    Args:
-        date1 (date): 第一个日期
-        date2 (date): 第二个日期
-        
-    Returns:
-        bool: 如果在同一月返回True，否则返回False
-        
-    Example:
-        >>> from datetime import date
-        >>> d1 = date(2024, 1, 15)
-        >>> d2 = date(2024, 1, 25)
-        >>> print(is_same_month(d1, d2))
-        True
-    """
-    return date1.year == date2.year and date1.month == date2.month

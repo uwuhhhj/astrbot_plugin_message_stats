@@ -5,7 +5,7 @@ HTML模板模块
 
 import aiofiles
 from pathlib import Path
-from astrbot.api import logger as logger
+from astrbot.api import logger
 
 # 模板文件路径
 TEMPLATE_DIR = Path(__file__).parent

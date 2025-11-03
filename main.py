@@ -19,7 +19,7 @@ import astrbot.api.message_components as Comp
 
 from .utils.data_manager import DataManager
 from .utils.image_generator import ImageGenerator, ImageGenerationError
-from .utils.validators import Validators, ValidationError, CommandValidator
+from .utils.validators import Validators, ValidationError
 from .utils.models import (
     UserData, PluginConfig, GroupInfo, MessageDate, 
     RankType
@@ -335,7 +335,6 @@ class MessageStatsPlugin(Star):
             group_id = str(group_id)
             
             # 获取参数
-            command_validator = CommandValidator()
             args = event.message_str.split()[1:] if hasattr(event, 'message_str') else []
             
             if not args:
@@ -498,6 +497,19 @@ class MessageStatsPlugin(Star):
         
         return nickname
     
+    def _get_display_name_from_member(self, member: Dict[str, Any]) -> Optional[str]:
+        """从群成员信息中提取显示昵称
+        
+        提取用户昵称的辅助函数，避免重复的逻辑
+        
+        Args:
+            member (Dict[str, Any]): 群成员信息字典
+            
+        Returns:
+            Optional[str]: 用户的显示昵称，如果获取失败则返回None
+        """
+        return member.get("card") or member.get("nickname")
+
     async def _get_user_nickname_unified(self, event: AstrMessageEvent, group_id: str, user_id: str) -> str:
         """统一的用户昵称获取方法 - 简化版缓存查找逻辑
         
@@ -527,7 +539,7 @@ class MessageStatsPlugin(Star):
             members_dict = self.group_members_dict_cache[dict_cache_key]
             if user_id in members_dict:
                 member = members_dict[user_id]
-                display_name = member.get("card") or member.get("nickname")
+                display_name = self._get_display_name_from_member(member)
                 if display_name:
                     self.user_nickname_cache[nickname_cache_key] = display_name
                     return display_name
@@ -543,7 +555,7 @@ class MessageStatsPlugin(Star):
                 # 查找用户
                 if user_id in members_dict:
                     member = members_dict[user_id]
-                    display_name = member.get("card") or member.get("nickname")
+                    display_name = self._get_display_name_from_member(member)
                     if display_name:
                         self.user_nickname_cache[nickname_cache_key] = display_name
                         return display_name
@@ -586,14 +598,7 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"获取备用昵称失败: {e}")
             return f"用户{user_id}"
     
-    async def _find_user_fast(self, group_id: str, user_id: str) -> Optional[str]:
-        """快速查找用户昵称 - 使用预构建字典缓存（已简化，逻辑移至统一方法）"""
-        # 注意：此方法保留用于向后兼容，核心逻辑已移至_get_user_nickname_unified
-        # 为了性能考虑，这里只做最快速的缓存检查
-        nickname_cache_key = f"nickname_{user_id}"
-        if nickname_cache_key in self.user_nickname_cache:
-            return self.user_nickname_cache[nickname_cache_key]
-        return None
+
     
     def clear_user_cache(self, user_id: str = None):
         """清理用户缓存"""
@@ -644,25 +649,7 @@ class MessageStatsPlugin(Star):
         
         return None
     
-    async def _find_user_in_members(self, members_info: List[Dict[str, Any]], user_id: str) -> Optional[str]:
-        """在群成员列表中查找用户昵称（已简化，逻辑移至统一方法）"""
-        # 注意：此方法保留用于向后兼容，核心逻辑已移至_get_user_nickname_unified
-        # 为了性能考虑，这里只做最快速的缓存检查和简单查找
-        cache_key = f"nickname_{user_id}"
-        if cache_key in self.user_nickname_cache:
-            return self.user_nickname_cache[cache_key]
-        
-        # 简单的字典查找（不重建缓存）
-        members_dict = {str(m.get("user_id", "")): m for m in members_info if m.get("user_id")}
-        member = members_dict.get(user_id)
-        
-        if member:
-            display_name = member.get("card") or member.get("nickname")
-            if display_name:
-                self.user_nickname_cache[cache_key] = display_name
-                return display_name
-        
-        return None
+
     
     async def _get_group_name(self, event: AstrMessageEvent, group_id: str) -> str:
         """获取群名称,使用AstrBot官方API"""
@@ -744,15 +731,12 @@ class MessageStatsPlugin(Star):
                 yield event.plain_result("这个时间段还没有人发言呢~")
                 return
             
-            # 解包用户数据和对应的排序值
-            filtered_data = [(user_data, sort_value) for user_data, sort_value in filtered_data_with_values]
-            
             # 对数据进行排序，使用明确的排序键
             def get_sort_key(item):
                 user_data, sort_value = item
                 return sort_value
             
-            filtered_data = sorted(filtered_data, key=get_sort_key, reverse=True)
+            filtered_data = sorted(filtered_data_with_values, key=get_sort_key, reverse=True)
             
             # 获取配置
             config = await self.data_manager.get_config()
@@ -825,8 +809,8 @@ class MessageStatsPlugin(Star):
         current_date = datetime.now().date()
         
         if rank_type == RankType.TOTAL:
-            # 总榜：返回每个用户及其总发言数的元组
-            return [(user, user.message_count) for user in group_data]
+            # 总榜：返回每个用户及其总发言数的元组，但过滤掉从未发言的用户
+            return [(user, user.message_count) for user in group_data if user.message_count > 0]
         
         elif rank_type == RankType.DAILY:
             # 今日榜：计算今日发言次数
@@ -882,8 +866,8 @@ class MessageStatsPlugin(Star):
             
             return filtered_users
         
-        # 默认情况：返回原始数据
-        return [(user, user.message_count) for user in group_data]
+        # 默认情况：返回原始数据，但过滤掉0次发言的用户
+        return [(user, user.message_count) for user in group_data if user.message_count > 0]
     
     def _generate_title(self, rank_type: RankType) -> str:
         """生成标题"""
@@ -914,15 +898,11 @@ class MessageStatsPlugin(Star):
         Returns:
             str: 格式化的文字消息
         """
-        # 解包用户数据和排序值
-        users = [(user_data, sort_value) for user_data, sort_value in users_with_values]
-        
         # 计算时间段内的总发言数
-        total_messages = sum(sort_value for _, sort_value in users)
+        total_messages = sum(sort_value for _, sort_value in users_with_values)
         
-        # 排序并限制数量
-        sorted_users = sorted(users, key=lambda x: x[1], reverse=True)
-        top_users = sorted_users[:config.rand]
+        # 数据已经在_show_rank中排好序，直接使用并限制数量
+        top_users = users_with_values[:config.rand]
         
         msg = [f"{title}\n发言总数: {total_messages}\n━━━━━━━━━━━━━━\n"]
         

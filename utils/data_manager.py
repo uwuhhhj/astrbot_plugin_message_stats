@@ -9,7 +9,6 @@ import json
 import re
 import traceback
 import time
-import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 import aiofiles
@@ -50,13 +49,22 @@ class DataManager:
         >>> users = await dm.get_group_data("123456789")
     """
     
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: Optional[str] = None):
         """初始化数据管理器
 
         Args:
-            data_dir (str): 数据目录路径，默认为"data"
+            data_dir (str): 数据目录路径，由StarTools.get_data_dir()确定
         """
-        self.data_dir = Path(data_dir)
+        if data_dir is None:
+            # 导入StarTools并获取标准数据目录
+            try:
+                from astrbot.core.platform.star import StarTools
+                self.data_dir = Path(StarTools.get_data_dir())
+            except ImportError:
+                # 如果StarTools不可用，使用当前目录下的data目录
+                self.data_dir = Path("data")
+        else:
+            self.data_dir = Path(data_dir)
         self.groups_dir = self.data_dir / "groups"
         self.cache_dir = self.data_dir / "cache" / "rank_images"
         self.config_file = self.data_dir / "config.json"
@@ -137,21 +145,19 @@ class DataManager:
         except json.JSONDecodeError:
             return False
     
-    def _repair_corrupted_json(self, content: str) -> Optional[List[Dict]]:
+    async def _repair_corrupted_json(self, file_path: Path, content: str) -> List[Dict]:
         """尝试修复损坏的JSON数据
         
-        改进的修复逻辑，能够处理多种JSON损坏情况：
-        1. JSON列表末尾被截断
-        2. 不完整的JSON对象
-        3. 缺少闭合括号
-        4. 多余的逗号
-        5. 编码问题
+        稳健的修复策略：
+        1. 尝试简单修复（清理多余逗号）
+        2. 如果失败，备份损坏的文件并创建新的空数据文件
         
         Args:
+            file_path (Path): 文件路径，用于备份
             content (str): 损坏的JSON内容
             
         Returns:
-            Optional[List[Dict]]: 修复后的数据，如果无法修复则返回None
+            List[Dict]: 修复后的数据（空列表表示创建了新文件）
         """
         try:
             # 首先尝试直接解析
@@ -160,156 +166,29 @@ class DataManager:
             pass
         
         try:
-            # 修复1: 清理多余的逗号
-            content = re.sub(r',(\s*[}\]])', r'\1', content)
-            
-            # 修复2: 处理列表末尾被截断的情况
-            bracket_count = 0
-            last_valid_pos = 0
-            
-            for i, char in enumerate(content):
-                if char == '[':
-                    bracket_count += 1
-                elif char == ']':
-                    bracket_count -= 1
-                    if bracket_count == 0:
-                        last_valid_pos = i + 1
-            
-            if last_valid_pos > 0:
-                # 提取有效的JSON部分
-                valid_content = content[:last_valid_pos]
-                return json.loads(valid_content)
-            
-            # 修复3: 尝试找到最后一个完整的对象
-            brace_count = 0
-            last_object_end = -1
-            
-            for i, char in enumerate(content):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        last_object_end = i + 1
-            
-            if last_object_end > 0 and '[' in content:
-                # 尝试重构JSON数组
-                start_bracket = content.find('[')
-                if start_bracket != -1:
-                    # 提取对象部分
-                    objects_content = content[start_bracket:last_object_end]
-                    # 手动构建完整的JSON
-                    objects = []
-                    current_obj = ""
-                    brace_depth = 0
-                    in_string = False
-                    escape_next = False
-                    
-                    for char in objects_content:
-                        if escape_next:
-                            escape_next = False
-                            current_obj += char
-                            continue
-                            
-                        if char == '\\':
-                            escape_next = True
-                            current_obj += char
-                            continue
-                            
-                        if char == '"' and not escape_next:
-                            in_string = not in_string
-                            
-                        if not in_string:
-                            if char == '{':
-                                brace_depth += 1
-                            elif char == '}':
-                                brace_depth -= 1
-                        
-                        current_obj += char
-                        
-                        # 如果我们到达了一个完整对象的结尾
-                        if brace_depth == 0 and current_obj.strip():
-                            try:
-                                obj = json.loads(current_obj.strip())
-                                if isinstance(obj, dict):
-                                    objects.append(obj)
-                                current_obj = ""
-                            except json.JSONDecodeError:
-                                # 如果这个对象解析失败，跳过它
-                                current_obj = ""
-                    
-                    if objects:
-                        return objects
-            
-            # 修复4: 尝试逐行解析
-            lines = content.split('\n')
-            objects = []
-            current_obj = ""
-            brace_depth = 0
-            in_string = False
-            escape_next = False
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                for char in line:
-                    if escape_next:
-                        escape_next = False
-                        current_obj += char
-                        continue
-                        
-                    if char == '\\':
-                        escape_next = True
-                        current_obj += char
-                        continue
-                        
-                    if char == '"' and not escape_next:
-                        in_string = not in_string
-                    
-                    if not in_string:
-                        if char == '{':
-                            brace_depth += 1
-                        elif char == '}':
-                            brace_depth -= 1
-                    
-                    current_obj += char
-                    
-                    # 如果我们到达了一个完整对象的结尾
-                    if brace_depth == 0 and current_obj.strip():
-                        try:
-                            obj = json.loads(current_obj.strip())
-                            if isinstance(obj, dict):
-                                objects.append(obj)
-                            current_obj = ""
-                        except json.JSONDecodeError:
-                            # 如果这个对象解析失败，跳过它
-                            current_obj = ""
-            
-            if objects:
-                return objects
-                
-        except (json.JSONDecodeError, IndexError, UnicodeDecodeError):
-            pass
-        
-        # 修复5: 最后的尝试 - 清理所有可能的格式问题
-        try:
-            # 移除所有不可见字符
-            cleaned_content = ''.join(char for char in content if char.isprintable() or char in ['\n', '\r', '\t'])
-            
-            # 尝试修复常见的JSON格式问题
-            cleaned_content = re.sub(r',(\s*[}\]])', r'\1', cleaned_content)  # 移除多余逗号
-            cleaned_content = re.sub(r'([{\[])\s*,', r'\1', cleaned_content)  # 移除开头逗号
-            
-            # 尝试再次解析
+            # 尝试简单修复：清理多余的逗号
+            cleaned_content = re.sub(r',(\s*[}\]])', r'\1', content)
             return json.loads(cleaned_content)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            pass
-        
-        # 如果所有修复尝试都失败，返回空列表而不是None
-        # 这样可以保证数据的连续性
-        return []
+            # 简单修复失败，采用稳健策略：备份并重建
+            self.logger.warning(f"JSON文件 {file_path} 损坏，创建备份并重建")
+            
+            try:
+                # 创建备份文件
+                backup_path = file_path.with_suffix('.backup')
+                async with aiofiles.open(backup_path, 'w', encoding='utf-8') as f:
+                    await f.write(content)
+                
+                # 创建新的空数据文件
+                async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
+                    await f.write('[]')
+                
+                self.logger.info(f"已备份损坏文件到 {backup_path}，并创建新的空数据文件")
+                return []
+                
+            except Exception as e:
+                self.logger.error(f"备份和重建文件失败: {e}")
+                return []
     
     async def _save_json_safely(self, file_path: Path, data: List[Dict]) -> bool:
         """安全地保存JSON数据
@@ -381,16 +260,15 @@ class DataManager:
                     self.logger.warning(f"群组 {group_id} 数据文件格式异常，尝试修复")
                     
                     # 尝试修复损坏的数据
-                    repaired_data = self._repair_corrupted_json(content)
-                    if repaired_data is not None:
+                    repaired_data = await self._repair_corrupted_json(file_path, content)
+                    data_list = repaired_data
+                    if repaired_data:
                         # 修复成功，重新保存数据
                         self.logger.info(f"群组 {group_id} 数据修复成功")
                         await self._save_json_safely(file_path, repaired_data)
-                        data_list = repaired_data
                     else:
-                        # 修复失败，使用空数据
-                        self.logger.error(f"群组 {group_id} 数据无法修复，使用空数据")
-                        data_list = []
+                        # 已创建新的空数据文件
+                        self.logger.info(f"群组 {group_id} 已创建新的空数据文件")
                 else:
                     data_list = json.loads(content)
                 
@@ -940,8 +818,9 @@ class DataManager:
         """
         try:
             users = await self.get_group_data(group_id)
-            # 按消息数降序排序
-            sorted_users = sorted(users, key=lambda x: x.message_count, reverse=True)
+            # 过滤掉0次发言的用户，然后按消息数降序排序
+            active_users = [user for user in users if user.message_count > 0]
+            sorted_users = sorted(active_users, key=lambda x: x.message_count, reverse=True)
             return sorted_users[:limit]
         except (IOError, OSError) as e:
             self.logger.error(f"获取群组 {group_id} 排行榜时文件操作失败: {e}")
@@ -1066,8 +945,9 @@ class DataManager:
             
             for group_file in self.groups_dir.glob("*.json"):
                 try:
-                    # 检查文件最后修改时间
-                    if group_file.stat().st_mtime < cutoff_time:
+                    # 使用 asyncio.to_thread 将同步的 stat() 调用移到工作线程
+                    file_stat = await asyncio.to_thread(group_file.stat)
+                    if file_stat.st_mtime < cutoff_time:
                         group_id = group_file.stem
                         await self.clear_group_data(group_id)
                         cleaned_count += 1
@@ -1107,7 +987,7 @@ class DataManager:
             backup_dir.mkdir(exist_ok=True)
             
             # 生成备份文件名（包含时间戳）
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_file = backup_dir / f"{group_id}_{timestamp}.json"
             
             # 复制文件

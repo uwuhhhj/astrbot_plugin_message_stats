@@ -13,7 +13,6 @@ import traceback
 import hashlib
 import json
 from functools import lru_cache
-import asyncio
 
 from astrbot.api import logger as astrbot_logger
 
@@ -112,25 +111,10 @@ class ImageGenerator:
         self._cache_hits = 0
         self._cache_misses = 0
         
-        # 初始化Jinja2环境
-        try:
-            # 使用asyncio.create_task创建后台任务并正确处理异常
-            self._init_task = asyncio.create_task(self._init_jinja2_env())
-            # 添加异常处理回调，确保异常被捕获
-            self._init_task.add_done_callback(self._handle_init_exception)
-        except Exception as e:
-            self.logger.error(f"初始化Jinja2环境失败: {e}")
-            self.jinja_env = None
+        # Jinja2环境将在initialize方法中初始化
+        self.jinja_env = None
     
-    def _handle_init_exception(self, task):
-        """处理初始化任务的异常"""
-        try:
-            if task.exception():
-                self.logger.error(f"Jinja2环境初始化异常: {task.exception()}")
-                self.jinja_env = None
-        except Exception as e:
-            self.logger.error(f"处理初始化异常时出错: {e}")
-            self.jinja_env = None
+
     
     async def _init_jinja2_env(self):
         """初始化Jinja2环境
@@ -254,6 +238,10 @@ class ImageGenerator:
         
         try:
             self.logger.info("开始初始化图片生成器...")
+            
+            # 首先初始化Jinja2环境
+            await self._init_jinja2_env()
+            
             self.playwright = await async_playwright().start()
             self.logger.info("Playwright启动成功")
             
@@ -1131,24 +1119,10 @@ class ImageGenerator:
             # Jinja2环境已经配置了缓存
             self.logger.info("批量生成优化已启用")
     
+    @lru_cache(maxsize=128)
     def _cached_escape_html(self, text: str) -> str:
-        """带缓存的HTML转义"""
-        if not hasattr(self, '_escape_cache'):
-            self._escape_cache = {}
-        
-        if text in self._escape_cache:
-            return self._escape_cache[text]
-        
-        result = self._escape_html_safe(text)
-        self._escape_cache[text] = result
-        
-        # 限制缓存大小，防止内存泄漏
-        if len(self._escape_cache) > 128:
-            # 删除最旧的条目
-            oldest_key = next(iter(self._escape_cache))
-            del self._escape_cache[oldest_key]
-        
-        return result
+        """带缓存的HTML转义（使用LRU缓存）"""
+        return self._escape_html_safe(text)
     
     def _batch_process_user_items(self, users: List[UserData], current_user_id: Optional[str]) -> List[Dict[str, Any]]:
         """批量处理用户项目（进一步优化）"""
