@@ -15,7 +15,7 @@ RANK_TEMPLATE_PATH = TEMPLATE_DIR / "rank_template.html"
 async def get_rank_template() -> str:
     """获取排行榜HTML模板"""
     try:
-        if RANK_TEMPLATE_PATH.exists():
+        if await aiofiles.os.path.exists(RANK_TEMPLATE_PATH):
             async with aiofiles.open(RANK_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
                 return await f.read()
         else:
@@ -37,33 +37,36 @@ def get_default_template() -> str:
     <style>
         body {{
             font-family: Arial, sans-serif;
-            background: #f5f5f5;
+            background-color: #f5f5f5;
             padding: 20px;
+            margin: 0;
         }}
         .container {{
             max-width: 800px;
             margin: 0 auto;
-            background: white;
+            background-color: #ffffff;
             border-radius: 10px;
             padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }}
         .title {{
             text-align: center;
-            color: #333;
+            color: #333333;
             margin-bottom: 20px;
+            font-size: 24px;
         }}
         .user-item {{
             display: flex;
             align-items: center;
             padding: 10px;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid #eeeeee;
         }}
         .rank {{
             width: 40px;
             height: 40px;
             border-radius: 50%;
-            background: #007bff;
-            color: white;
+            background-color: #007bff;
+            color: #ffffff;
             display: flex;
             align-items: center;
             justify-content: center;

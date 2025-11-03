@@ -102,7 +102,7 @@ class DataManager:
         self.logger.info("数据管理器初始化中...")
         
         # 创建默认配置
-        if not self.config_file.exists():
+        if not await asyncio.to_thread(self.config_file.exists):
             await self._create_default_config()
         
         self.logger.info("数据管理器初始化完成")
@@ -961,13 +961,13 @@ class DataManager:
         try:
             source_file = self.groups_dir / f"{group_id}.json"
             
-            if not source_file.exists():
+            if not await asyncio.to_thread(source_file.exists):
                 self.logger.warning(f"群组 {group_id} 数据文件不存在，无法备份")
                 return None
             
             # 创建备份目录
             backup_dir = self.data_dir / "backups"
-            backup_dir.mkdir(exist_ok=True)
+            await asyncio.to_thread(backup_dir.mkdir, exist_ok=True)
             
             # 生成备份文件名（包含时间戳）
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

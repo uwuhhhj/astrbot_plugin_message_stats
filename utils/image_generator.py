@@ -735,11 +735,6 @@ class ImageGenerator:
             text = str(text)
         return html.escape(text, quote=True)
     
-    def _read_file_sync(self, file_path: Path) -> str:
-        """同步文件读取（用于线程池执行）"""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-
     def _validate_url_safe(self, url: str) -> str:
         """验证并清理URL"""
         if not isinstance(url, str):
@@ -780,29 +775,26 @@ class ImageGenerator:
             # 首先尝试从缓存获取
             cached_template = await self._get_cached_template()
             if cached_template:
-                # 如果缓存的是Jinja2模板对象，返回模板的源代码字符串
-                if JINJA2_AVAILABLE and isinstance(cached_template, Template):
-                    # 缓存命中，获取模板的源代码
+                # 根据缓存的数据类型进行处理
+                if isinstance(cached_template, Template):
+                    # 缓存的是Jinja2模板对象，需要重新加载源代码
                     self.logger.debug("使用缓存的Jinja2模板对象")
-                    # 直接返回缓存的源代码字符串
-                    if isinstance(cached_template, dict) and 'content' in cached_template:
-                        return cached_template['content']
-                    elif isinstance(cached_template, str):
-                        return cached_template
+                    if await aiofiles.os.path.exists(self.template_path):
+                        async with aiofiles.open(self.template_path, 'r', encoding='utf-8') as f:
+                            content = await f.read()
+                        # 更新缓存，包含源代码
+                        await self._update_template_cache(content)
+                        return content
                     else:
-                        # 如果缓存的是Template对象本身，需要重新加载源代码
-                        if await aiofiles.os.path.exists(self.template_path):
-                            async with aiofiles.open(self.template_path, 'r', encoding='utf-8') as f:
-                                content = await f.read()
-                            # 更新缓存，包含源代码
-                            await self._update_template_cache(content)
-                            return content
-                        else:
-                            # 如果文件不存在，返回默认模板
-                            return await self._get_default_template()
-                else:
+                        # 如果文件不存在，返回默认模板
+                        return await self._get_default_template()
+                elif isinstance(cached_template, str):
                     # 缓存的是字符串，直接返回
-                    return cached_template if isinstance(cached_template, str) else str(cached_template)
+                    self.logger.debug("使用缓存的模板字符串")
+                    return cached_template
+                else:
+                    # 其他类型，转换为字符串
+                    return str(cached_template)
             
             # 缓存未命中，从文件加载
             if await aiofiles.os.path.exists(self.template_path):

@@ -510,7 +510,6 @@ class Validators:
 
     
     @staticmethod
-    @staticmethod
     async def _normalize_path(file_path: str) -> str:
         """规范化文件路径（异步版本）
         
@@ -662,7 +661,6 @@ class Validators:
         if file_extension not in normalized_extensions:
             raise ValidationError(f"文件类型不支持，允许的类型: {', '.join(allowed_extensions)}")
     
-    @staticmethod
     @staticmethod
     async def validate_file_path(file_path: str, allowed_extensions: Optional[List[str]] = None, 
                           allowed_base_path: Optional[str] = None) -> str:

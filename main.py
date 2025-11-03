@@ -266,6 +266,14 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"记录消息统计失败(类型错误): {e}", exc_info=True)
         except KeyError as e:
             self.logger.error(f"记录消息统计失败(数据格式错误): {e}", exc_info=True)
+        except asyncio.TimeoutError as e:
+            self.logger.error(f"记录消息统计失败(超时错误): {e}", exc_info=True)
+        except ConnectionError as e:
+            self.logger.error(f"记录消息统计失败(连接错误): {e}", exc_info=True)
+        except asyncio.CancelledError as e:
+            self.logger.error(f"记录消息统计失败(操作取消): {e}", exc_info=True)
+        except (IOError, OSError) as e:
+            self.logger.error(f"记录消息统计失败(系统错误): {e}", exc_info=True)
         except Exception as e:
             self.logger.error(f"记录消息统计失败(未知错误): {e}", exc_info=True)
     
@@ -990,15 +998,20 @@ class MessageStatsPlugin(Star):
         if not history:
             return 0
         
-        # 检查历史记录是否已排序（优化性能）
-        # 简单检查：如果前几个元素是递增的，则假设已排序
+        # 检查历史记录是否已排序（完整检查）
+        # 通过遍历整个列表来验证排序状态，确保所有相邻元素都满足升序条件
         is_sorted = True
         if len(history) > 1:
             try:
-                first_date = history[0].to_date() if hasattr(history[0], 'to_date') else history[0]
-                second_date = history[1].to_date() if hasattr(history[1], 'to_date') else history[1]
-                if first_date > second_date:
-                    is_sorted = False
+                # 遍历整个列表，检查每一对相邻元素
+                for i in range(len(history) - 1):
+                    current_date = history[i].to_date() if hasattr(history[i], 'to_date') else history[i]
+                    next_date = history[i + 1].to_date() if hasattr(history[i + 1], 'to_date') else history[i + 1]
+                    
+                    # 如果当前元素大于下一个元素，则列表未排序
+                    if current_date > next_date:
+                        is_sorted = False
+                        break
             except (AttributeError, TypeError):
                 # 如果无法比较，假设未排序
                 is_sorted = False
