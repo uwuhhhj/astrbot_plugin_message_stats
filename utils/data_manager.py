@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 import aiofiles
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from cachetools import TTLCache
 from astrbot.api import logger as astrbot_logger
 from collections import defaultdict
@@ -61,8 +61,8 @@ class DataManager:
                 from astrbot.core.platform.star import StarTools
                 self.data_dir = Path(StarTools.get_data_dir())
             except ImportError:
-                # 如果StarTools不可用，使用当前目录下的data目录
-                self.data_dir = Path("data")
+                # 如果StarTools不可用，抛出异常而不是静默使用备用路径
+                raise ImportError("无法导入StarTools，必须使用StarTools.get_data_dir()获取数据目录")
         else:
             self.data_dir = Path(data_dir)
         self.groups_dir = self.data_dir / "groups"
@@ -842,14 +842,60 @@ class DataManager:
             period (str): 时间段，'day', 'week', 'month'
             
         Returns:
-            List[UserData]: 符合条件的用户列表
+            List[UserData]: 符合条件的用户列表（按消息数降序排序）
+            
+        Raises:
+            ValueError: 当period参数无效时抛出
         """
         try:
             users = await self.get_group_data(group_id)
             
-            # 这里可以根据需要实现时间段过滤逻辑
-            # 目前返回所有用户
-            return users
+            if not users:
+                return []
+            
+            # 计算时间范围
+            current_date = datetime.now().date()
+            
+            if period == 'day':
+                # 今日用户（活跃用户）
+                start_date = current_date
+                end_date = current_date
+            elif period == 'week':
+                # 本周用户（过去7天）
+                start_date = current_date - timedelta(days=6)
+                end_date = current_date
+            elif period == 'month':
+                # 本月用户（过去30天）
+                start_date = current_date - timedelta(days=29)
+                end_date = current_date
+            else:
+                raise ValueError(f"无效的时间段参数: {period}，支持的值为: 'day', 'week', 'month'")
+            
+            # 过滤在指定时间段内有发言的用户
+            filtered_users = []
+            for user in users:
+                message_count_in_period = user.get_message_count_in_period(start_date, end_date)
+                if message_count_in_period > 0:
+                    # 为用户创建临时对象，设置period_message_count属性用于排序
+                    temp_user = user
+                    temp_user.period_message_count = message_count_in_period
+                    filtered_users.append(temp_user)
+            
+            # 按时间段内的消息数降序排序
+            filtered_users.sort(key=lambda x: x.period_message_count, reverse=True)
+            
+            # 移除临时属性
+            for user in filtered_users:
+                if hasattr(user, 'period_message_count'):
+                    delattr(user, 'period_message_count')
+            
+            self.logger.debug(f"群组 {group_id} 在时间段 {period} 内找到 {len(filtered_users)} 个活跃用户")
+            return filtered_users
+            
+        except ValueError as e:
+            # 参数错误，直接抛出
+            self.logger.error(f"时间段参数错误: {e}")
+            raise
         except (IOError, OSError) as e:
             self.logger.error(f"获取群组 {group_id} 时间段用户时文件操作失败: {e}")
             return []

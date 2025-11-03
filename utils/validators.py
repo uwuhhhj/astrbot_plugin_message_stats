@@ -4,7 +4,7 @@
 """
 
 import re
-import os
+from pathlib import Path
 from typing import Any, Optional, List, Dict, Callable
 from datetime import datetime, date
 from astrbot.api import logger as astrbot_logger
@@ -510,62 +510,179 @@ class Validators:
     
     @staticmethod
     def _normalize_path(file_path: str) -> str:
-        """规范化文件路径"""
-        normalized_path = os.path.abspath(file_path)
-        return os.path.realpath(normalized_path)
+        """规范化文件路径
+        
+        使用 pathlib 规范化文件路径，处理相对路径、符号链接等。
+        
+        Args:
+            file_path (str): 要规范化的文件路径
+            
+        Returns:
+            str: 规范化后的绝对路径字符串
+        """
+        path_obj = Path(file_path)
+        # resolve() 会返回绝对路径并解析符号链接
+        normalized_path = path_obj.resolve()
+        return str(normalized_path)
     
     @staticmethod
     def _check_path_security(path: str) -> None:
-        """检查路径安全性"""
-        # 检查路径遍历攻击
-        if '..' in path.split(os.sep):
+        """检查路径安全性
+        
+        使用 pathlib 检查路径安全性，防止路径遍历攻击。
+        在路径规范化之前进行检查，确保检测到所有潜在的路径遍历攻击。
+        
+        Args:
+            path (str): 要检查的路径字符串
+            
+        Raises:
+            ValidationError: 当路径包含安全风险时抛出
+        """
+        # 首先检查原始路径是否包含路径遍历攻击
+        # 处理不同操作系统的路径分隔符
+        normalized_path = path.replace('\\', '/')
+        path_parts = [part for part in normalized_path.split('/') if part]  # 过滤空字符串
+        
+        # 检查是否有 .. 路径段
+        if '..' in path_parts:
             raise ValidationError("文件路径包含路径遍历攻击")
+        
+        # 检查是否有隐藏的危险模式
+        for part in path_parts:
+            if part in ['..', '.'] and part != '.':
+                raise ValidationError("文件路径包含路径遍历攻击")
+        
+        # 使用 pathlib 进行进一步的安全检查
+        try:
+            path_obj = Path(path)
+            # 检查路径中是否包含危险组件
+            for part in path_obj.parts:
+                if part in ['..', '.'] and part != '.':
+                    raise ValidationError("文件路径包含路径遍历攻击")
+        except (ValueError, OSError):
+            raise ValidationError("文件路径格式无效")
     
     @staticmethod
     def _validate_path_length(path: str) -> None:
-        """验证路径长度"""
-        if len(path) > 500:
-            raise ValidationError("文件路径过长")
+        """验证路径长度
+        
+        验证文件路径长度是否在合理范围内。
+        
+        Args:
+            path (str): 要验证的路径字符串
+            
+        Raises:
+            ValidationError: 当路径长度超出限制时抛出
+        """
+        # 使用 pathlib 获取路径长度
+        try:
+            path_obj = Path(path)
+            # 计算绝对路径的长度，这更准确地反映了实际的文件系统路径长度
+            abs_path = str(path_obj.resolve())
+            if len(abs_path) > 500:
+                raise ValidationError("文件路径过长")
+        except (OSError, ValueError):
+            # 如果无法解析路径，直接检查原始路径长度
+            if len(path) > 500:
+                raise ValidationError("文件路径过长")
     
     @staticmethod
     def _check_dangerous_chars(path: str) -> None:
-        """检查危险字符"""
+        """检查危险字符
+        
+        检查文件路径是否包含危险字符，这些字符在文件系统中可能引起问题。
+        
+        Args:
+            path (str): 要检查的路径字符串
+            
+        Raises:
+            ValidationError: 当路径包含危险字符时抛出
+        """
+        # 使用 pathlib 获取纯净的路径字符串（移除多余的斜杠等）
+        try:
+            path_obj = Path(path)
+            clean_path = str(path_obj)
+        except (ValueError, OSError):
+            # 如果 pathlib 无法处理，使用原始路径进行检查
+            clean_path = path
+        
         dangerous_chars = ['<', '>', ':', '"', '|', '?', '*', '\x00', '\x0a', '\x0d']
         for char in dangerous_chars:
-            if char in path:
+            if char in clean_path:
                 raise ValidationError(f"文件路径包含危险字符: {char}")
     
     @staticmethod
     def _validate_base_path(path: str, allowed_base_path: Optional[str]) -> None:
-        """验证基础路径限制"""
+        """验证基础路径限制
+        
+        使用 pathlib 验证文件路径是否在允许的基础目录范围内。
+        
+        Args:
+            path (str): 要验证的文件路径
+            allowed_base_path (Optional[str]): 允许的基础路径
+            
+        Raises:
+            ValidationError: 当文件路径超出允许范围时抛出
+        """
         if not allowed_base_path:
             return
         
         try:
-            allowed_abs_path = os.path.abspath(allowed_base_path)
-            allowed_real_path = os.path.realpath(allowed_abs_path)
+            path_obj = Path(path)
+            allowed_path_obj = Path(allowed_base_path).resolve()
             
-            if not path.startswith(allowed_real_path + os.sep) and path != allowed_real_path:
+            # 检查路径是否在允许的基础路径内
+            if not path_obj.is_relative_to(allowed_path_obj) and path_obj != allowed_path_obj:
                 raise ValidationError("文件路径超出允许的目录范围")
-        except (OSError, ValueError):
-            raise ValidationError("允许的基础路径无效")
+        except (OSError, ValueError, AttributeError):
+            # pathlib.is_relative_to 在 Python 3.9+ 可用
+            # 对于较老版本，使用兼容性检查
+            try:
+                path_obj = Path(path)
+                allowed_path_obj = Path(allowed_base_path).resolve()
+                
+                # 兼容性检查
+                try:
+                    path_obj.relative_to(allowed_path_obj)
+                except ValueError:
+                    # 如果无法获取相对路径，说明不在允许范围内
+                    if not str(path_obj).startswith(str(allowed_path_obj)) and path_obj != allowed_path_obj:
+                        raise ValidationError("文件路径超出允许的目录范围")
+            except (OSError, ValueError):
+                raise ValidationError("允许的基础路径无效")
     
     @staticmethod
     def _validate_extensions(path: str, allowed_extensions: Optional[List[str]]) -> None:
-        """验证文件扩展名"""
+        """验证文件扩展名
+        
+        使用 pathlib 验证文件扩展名是否在允许列表中。
+        
+        Args:
+            path (str): 要验证的文件路径
+            allowed_extensions (Optional[List[str]]): 允许的扩展名列表
+            
+        Raises:
+            ValidationError: 当文件扩展名不在允许列表中时抛出
+        """
         if not allowed_extensions:
             return
         
-        _, ext = os.path.splitext(path.lower())
-        if ext not in [ext.lower() for ext in allowed_extensions]:
+        path_obj = Path(path)
+        file_extension = path_obj.suffix.lower()
+        
+        # 标准化扩展名列表（确保都是小写）
+        normalized_extensions = [ext.lower() if ext.startswith('.') else f'.{ext.lower()}' 
+                               for ext in allowed_extensions]
+        
+        if file_extension not in normalized_extensions:
             raise ValidationError(f"文件类型不支持，允许的类型: {', '.join(allowed_extensions)}")
     
     @staticmethod
     def validate_file_path(file_path: str, allowed_extensions: Optional[List[str]] = None, 
                           allowed_base_path: Optional[str] = None) -> str:
-        """验证文件路径（简化版）
+        """验证文件路径（使用 pathlib）
         
-        验证文件路径的安全性，防止路径遍历攻击。
+        验证文件路径的安全性，使用 pathlib 的面向对象接口处理跨平台路径差异。
         支持可选的扩展名白名单和基础路径限制。
         
         Args:
@@ -587,16 +704,19 @@ class Validators:
         if not file_path:
             raise ValidationError("文件路径不能为空")
         
+        # 在路径规范化之前进行安全检查
+        Validators._check_path_security(file_path)
+        Validators._check_dangerous_chars(file_path)
+        
         try:
-            # 路径规范化
-            final_path = Validators._normalize_path(file_path)
+            # 使用 pathlib 进行路径规范化
+            path_obj = Path(file_path)
+            final_path = str(path_obj.resolve())
         except (OSError, ValueError) as e:
             raise ValidationError(f"文件路径无效: {e}")
         
-        # 各项安全检查
-        Validators._check_path_security(final_path)
+        # 规范化后的安全检查
         Validators._validate_path_length(final_path)
-        Validators._check_dangerous_chars(final_path)
         Validators._validate_base_path(final_path, allowed_base_path)
         Validators._validate_extensions(final_path, allowed_extensions)
         

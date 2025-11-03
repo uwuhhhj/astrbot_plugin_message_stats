@@ -326,9 +326,17 @@ class UserData:
         
         # 重建history
         if "history" in data:
-            for hist_str in data["history"]:
-                year, month, day = map(int, hist_str.split('-'))
-                user_data.history.append(MessageDate(year, month, day))
+            try:
+                for hist_str in data["history"]:
+                    try:
+                        year, month, day = map(int, hist_str.split('-'))
+                        user_data.history.append(MessageDate(year, month, day))
+                    except (ValueError, IndexError) as e:
+                        # 跳过格式错误的日期记录
+                        continue
+            except TypeError:
+                # 如果history不是可迭代对象，跳过
+                pass
         
         return user_data
     
@@ -349,7 +357,7 @@ class PluginConfig:
     Attributes:
         is_admin_restricted (int): 是否限制管理员操作，0为不限制，1为限制
         rand (int): 排行榜显示人数，默认为20人
-        if_send_pic (int): 是否发送图片，0为文字模式，1为图片模式
+        send_pic (int): 是否发送图片，0为文字模式，1为图片模式
         
     Methods:
         to_dict(): 转换为字典格式
@@ -358,11 +366,11 @@ class PluginConfig:
     Example:
         >>> config = PluginConfig()
         >>> config.rand = 15
-        >>> config.if_send_pic = 1
+        >>> config.send_pic = 1
     """
     is_admin_restricted: int = 0
     rand: int = 20
-    if_send_pic: int = 1
+    send_pic: int = 1
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典
@@ -384,7 +392,7 @@ class PluginConfig:
         return {
             "is_admin_restricted": self.is_admin_restricted,
             "rand": self.rand,
-            "if_send_pic": self.if_send_pic
+            "if_send_pic": self.send_pic
         }
     
     @classmethod
@@ -408,7 +416,7 @@ class PluginConfig:
         return cls(
             is_admin_restricted=data.get("is_admin_restricted", 0),
             rand=data.get("rand", 20),
-            if_send_pic=data.get("if_send_pic", 1)
+            send_pic=data.get("if_send_pic", 1)
         )
 
 

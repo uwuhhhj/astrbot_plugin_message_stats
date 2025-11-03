@@ -309,6 +309,8 @@ class ImageGenerator:
         if not self.browser:
             await self.initialize()
         
+        temp_path = None
+        
         try:
             # 创建页面
             self.page = await self.browser.new_page()
@@ -347,6 +349,9 @@ class ImageGenerator:
             if self.page:
                 await self.page.close()
                 self.page = None
+            
+            # 注意：不在这里删除临时文件，让调用方负责清理
+            # 以避免在返回路径后立即删除文件的问题
     
     async def _generate_html(self, 
                       users: List[UserData], 
@@ -1123,47 +1128,3 @@ class ImageGenerator:
     def _cached_escape_html(self, text: str) -> str:
         """带缓存的HTML转义（使用LRU缓存）"""
         return self._escape_html_safe(text)
-    
-    def _batch_process_user_items(self, users: List[UserData], current_user_id: Optional[str]) -> List[Dict[str, Any]]:
-        """批量处理用户项目（进一步优化）"""
-        if not users:
-            return []
-        
-        total_messages = sum(getattr(user, 'display_total', user.message_count) for user in users)
-        
-        # 使用列表推导式和生成器表达式优化性能
-        user_items = []
-        for i, user in enumerate(users):
-            is_current_user = current_user_id and user.user_id == current_user_id
-            # 使用时间段内的发言数
-            user_messages = getattr(user, 'display_total', user.message_count)
-            user_items.append({
-                'rank': i + 1,
-                'nickname': self._cached_escape_html(user.nickname),
-                'avatar_url': self._get_avatar_url(user.user_id),
-                'total': user_messages,
-                'percentage': (user_messages / total_messages * 100) if total_messages > 0 else 0,
-                'last_date': self._cached_escape_html(user.last_date or "未知"),
-                'is_current_user': is_current_user,
-                'is_separator': False
-            })
-        
-        # 处理当前用户（如果不在排行榜中）
-        if current_user_id and not any(item['is_current_user'] for item in user_items):
-            current_user_data = next((user for user in users if user.user_id == current_user_id), None)
-            if current_user_data:
-                # 使用时间段内的发言数计算排名
-                current_user_messages = getattr(current_user_data, 'display_total', current_user_data.message_count)
-                current_rank = sum(1 for user in users if getattr(user, 'display_total', user.message_count) > current_user_messages) + 1
-                user_items.append({
-                    'rank': current_rank,
-                    'nickname': self._cached_escape_html(current_user_data.nickname),
-                    'avatar_url': self._get_avatar_url(current_user_data.user_id),
-                    'total': current_user_messages,
-                    'percentage': (current_user_messages / total_messages * 100) if total_messages > 0 else 0,
-                    'last_date': self._cached_escape_html(current_user_data.last_date or "未知"),
-                    'is_current_user': True,
-                    'is_separator': True
-                })
-        
-        return user_items

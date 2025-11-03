@@ -343,7 +343,7 @@
                 <div class="{{ 'user-item-current' if item.is_current_user else 'user-item' }}" 
                      style="{{ 'margin-top: 20px; border-top: 2px dashed #bdc3c7;' if item.is_separator else '' }}">
                     <div class="rank-number" style="color: #3B82F6; font-weight: bold; font-size: 36px;">#{{ item.rank }}</div>
-                    <img class="avatar" src="{{ item.avatar_url }}" style="border-color: #ffffff;" />
+                    <img class="avatar" src="{{ item.avatar_url }}" style="border-color: #ffffff; border-width: 3px; border-style: solid;" />
                     <div class="info">
                         <div class="name-date">
                             <div class="nickname">{{ item.nickname }}</div>

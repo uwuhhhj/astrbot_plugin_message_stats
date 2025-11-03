@@ -402,7 +402,7 @@ class MessageStatsPlugin(Star):
             
             # 保存配置
             config = await self.data_manager.get_config()
-            config.if_send_pic = if_send_pic
+            config.send_pic = if_send_pic
             await self.data_manager.save_config(config)
             
             yield event.plain_result(f"排行榜显示模式已设置为 {mode_text}！")
@@ -563,8 +563,8 @@ class MessageStatsPlugin(Star):
             self.logger.warning(f"获取群成员信息失败(数据格式错误): {e}")
         except (ConnectionError, TimeoutError, OSError) as e:
             self.logger.warning(f"获取群成员信息失败(网络错误): {e}")
-        except Exception as e:
-            self.logger.warning(f"获取群成员信息失败(未知错误): {e}")
+        except (ImportError, RuntimeError) as e:
+            self.logger.warning(f"获取群成员信息失败(系统错误): {e}")
         
         # 步骤4: 返回默认昵称
         return f"用户{user_id}"
@@ -644,144 +644,48 @@ class MessageStatsPlugin(Star):
             self.logger.warning(f"获取群成员列表失败(数据格式错误): {e}")
         except (ConnectionError, TimeoutError, OSError) as e:
             self.logger.warning(f"获取群成员列表失败(网络错误): {e}")
-        except Exception as e:
-            self.logger.warning(f"获取群成员列表失败(未知错误): {e}")
+        except (ImportError, RuntimeError, ValueError) as e:
+            self.logger.warning(f"获取群成员列表失败(系统错误): {e}")
         
         return None
     
 
     
     async def _get_group_name(self, event: AstrMessageEvent, group_id: str) -> str:
-        """获取群名称,使用AstrBot官方API"""
+        """获取群名称 - 简化版本"""
         try:
-            # 使用AstrBot官方API获取群聊数据(注意使用await)
             group_data = await event.get_group(group_id)
-            
             if group_data:
-                # 尝试从群数据中获取群名称
-                group_name = None
-                
-                # 尝试不同的属性名
-                if hasattr(group_data, 'group_name'):
-                    group_name = group_data.group_name
-                elif hasattr(group_data, 'name'):
-                    group_name = group_data.name
-                elif hasattr(group_data, 'title'):
-                    group_name = group_data.title
-                
-                if group_name:
-                    return group_name
-            
-            # 如果无法获取群名称,回退到默认格式
+                # 简化群名获取逻辑，直接尝试常用属性
+                return getattr(group_data, 'group_name', None) or \
+                       getattr(group_data, 'name', None) or \
+                       getattr(group_data, 'title', None) or \
+                       f"群{group_id}"
             return f"群{group_id}"
-            
-        except (AttributeError, KeyError, TypeError) as e:
-            self.logger.error(f"获取群名称失败: {e}")
-            # 发生错误时回退到默认格式
+        except (AttributeError, KeyError, TypeError, OSError) as e:
+            self.logger.warning(f"获取群名称失败，使用默认名称: {e}")
             return f"群{group_id}"
     
     async def _show_rank(self, event: AstrMessageEvent, rank_type: RankType):
-        """显示排行榜
-        
-        通用的排行榜显示方法,支持多种排行榜类型.根据配置自动选择图片或文字模式.
-        
-        Args:
-            event (AstrMessageEvent): AstrBot消息事件对象
-            rank_type (RankType): 排行榜类型,支持TOTAL/DAILY/WEEKLY/MONTHLY
-            
-        Yields:
-            MessageEventResult: 返回排行榜结果(图片或文字)
-            
-        Raises:
-            ValueError: 当参数验证失败时抛出
-            TypeError: 当参数类型错误时抛出
-            KeyError: 当数据格式错误时抛出
-            
-        Example:
-            >>> async for result in self._show_rank(event, RankType.TOTAL):
-            ...     yield result
-        """
+        """显示排行榜 - 重构版本"""
         try:
-            # 获取群组ID和用户ID
-            group_id = event.get_group_id()
-            current_user_id = event.get_sender_id()
-            
-            if not group_id:
-                yield event.plain_result("无法获取群组信息,请在群聊中使用此命令！")
-                return
-                
-            if not current_user_id:
-                yield event.plain_result("无法获取用户信息！")
+            # 准备数据
+            rank_data = await self._prepare_rank_data(event, rank_type)
+            if rank_data is None:
+                yield event.plain_result("无法获取排行榜数据,请检查群组信息或稍后重试")
                 return
             
-            group_id = str(group_id)
-            current_user_id = str(current_user_id)
-            
-            # 获取群组数据
-            group_data = await self.data_manager.get_group_data(group_id)
-            
-            if not group_data:
-                yield event.plain_result("本群好像还没人说过话呢~")
-                return
-            
-            # 根据类型筛选数据并获取排序值
-            filtered_data_with_values = await self._filter_data_by_rank_type(group_data, rank_type)
-            
-            if not filtered_data_with_values:
-                yield event.plain_result("这个时间段还没有人发言呢~")
-                return
-            
-            # 对数据进行排序，使用明确的排序键
-            def get_sort_key(item):
-                user_data, sort_value = item
-                return sort_value
-            
-            filtered_data = sorted(filtered_data_with_values, key=get_sort_key, reverse=True)
-            
-            # 获取配置
-            config = await self.data_manager.get_config()
-            
-            # 生成标题
-            title = self._generate_title(rank_type)
-            
-            # 创建群组信息
-            group_info = GroupInfo(group_id=group_id)
-            
-            # 获取群名称
-            group_name = await self._get_group_name(event, group_id)
-            group_info.group_name = group_name
+            group_id, current_user_id, filtered_data, config, title, group_info = rank_data
             
             # 根据配置选择显示模式
-            if config.if_send_pic:
-                try:
-                    # 提取用户数据用于图片生成（只需要UserData对象）
-                    users_for_image = [user_data for user_data, _ in filtered_data]
-                    
-                    # 使用图片生成器
-                    image_path = await self.image_generator.generate_rank_image(
-                        users_for_image, group_info, title, current_user_id
-                    )
-                    
-                    # 检查图片文件是否存在
-                    if os.path.exists(image_path):
-                        # 发送图片
-                        yield event.image_result(image_path)
-                    else:
-                        # 回退到文字模式
-                        text_msg = self._generate_text_message(filtered_data, group_info, title, config)
-                        yield event.plain_result(text_msg)
-                        
-                except (IOError, OSError, FileNotFoundError) as e:
-                    self.logger.error(f"生成图片失败: {e}")
-                    # 回退到文字模式
-                    text_msg = self._generate_text_message(filtered_data, group_info, title, config)
-                    yield event.plain_result(text_msg)
+            if config.send_pic:
+                async for result in self._render_rank_as_image(event, filtered_data, group_info, title, current_user_id, config):
+                    yield result
             else:
-                # 使用文字模式
-                text_msg = self._generate_text_message(filtered_data, group_info, title, config)
-                yield event.plain_result(text_msg)
+                async for result in self._render_rank_as_text(event, filtered_data, group_info, title, config):
+                    yield result
         
-        except (IOError, OSError, FileNotFoundError) as e:
+        except (IOError, OSError) as e:
             self.logger.error(f"文件操作失败: {e}")
             yield event.plain_result("文件操作失败,请检查权限")
         except (AttributeError, KeyError, TypeError) as e:
@@ -790,84 +694,150 @@ class MessageStatsPlugin(Star):
         except (ConnectionError, TimeoutError) as e:
             self.logger.error(f"网络请求失败: {e}")
             yield event.plain_result("网络请求失败,请稍后重试")
-        except Exception as e:
-            self.logger.error(f"显示排行榜失败: {e}")
-            yield event.plain_result("生成排行榜失败,请稍后重试")
+        except (ImportError, RuntimeError, ValueError) as e:
+            self.logger.error(f"系统错误: {e}")
+            yield event.plain_result("系统错误,请联系管理员")
     
-    async def _filter_data_by_rank_type(self, group_data: List[UserData], rank_type: RankType) -> List[tuple]:
-        """根据排行榜类型筛选数据并计算时间段内的发言次数
+    async def _prepare_rank_data(self, event: AstrMessageEvent, rank_type: RankType):
+        """准备排行榜数据"""
+        # 获取群组ID和用户ID
+        group_id = event.get_group_id()
+        current_user_id = event.get_sender_id()
         
-        重构版本：返回包含用户数据和排序值的元组列表，避免魔法属性
+        if not group_id:
+            return None
+            
+        if not current_user_id:
+            return None
+        
+        group_id = str(group_id)
+        current_user_id = str(current_user_id)
+        
+        # 获取群组数据
+        group_data = await self.data_manager.get_group_data(group_id)
+        
+        if not group_data:
+            return None
+        
+        # 根据类型筛选数据并获取排序值
+        filtered_data_with_values = await self._filter_data_by_rank_type(group_data, rank_type)
+        
+        if not filtered_data_with_values:
+            return None
+        
+        # 对数据进行排序
+        filtered_data = sorted(filtered_data_with_values, key=lambda x: x[1], reverse=True)
+        
+        # 获取配置
+        config = await self.data_manager.get_config()
+        
+        # 生成标题
+        title = self._generate_title(rank_type)
+        
+        # 创建群组信息
+        group_info = GroupInfo(group_id=group_id)
+        
+        # 获取群名称
+        group_name = await self._get_group_name(event, group_id)
+        group_info.group_name = group_name
+        
+        return group_id, current_user_id, filtered_data, config, title, group_info
+    
+    async def _render_rank_as_image(self, event: AstrMessageEvent, filtered_data: List[tuple], 
+                                  group_info: GroupInfo, title: str, current_user_id: str, config: PluginConfig):
+        """渲染排行榜为图片模式"""
+        temp_path = None
+        try:
+            # 提取用户数据用于图片生成，并应用人数限制
+            # 先限制数量，再提取用户数据
+            limited_data = filtered_data[:config.rand]
+            users_for_image = [user_data for user_data, _ in limited_data]
+            
+            # 使用图片生成器
+            temp_path = await self.image_generator.generate_rank_image(
+                users_for_image, group_info, title, current_user_id
+            )
+            
+            # 检查图片文件是否存在
+            if os.path.exists(temp_path):
+                yield event.image_result(temp_path)
+            else:
+                # 回退到文字模式
+                text_msg = self._generate_text_message(filtered_data, group_info, title, config)
+                yield event.plain_result(text_msg)
+                
+        except (IOError, OSError, FileNotFoundError) as e:
+            self.logger.error(f"生成图片失败: {e}")
+            # 回退到文字模式
+            text_msg = self._generate_text_message(filtered_data, group_info, title, config)
+            yield event.plain_result(text_msg)
+        except (ImportError, RuntimeError, ValueError) as e:
+            self.logger.error(f"图片渲染失败: {e}")
+            # 回退到文字模式
+            text_msg = self._generate_text_message(filtered_data, group_info, title, config)
+            yield event.plain_result(text_msg)
+        finally:
+            # 清理临时文件，避免资源泄漏
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                    self.logger.debug(f"临时图片文件已清理: {temp_path}")
+                except OSError as e:
+                    self.logger.warning(f"清理临时图片文件失败: {temp_path}, 错误: {e}")
+    
+    async def _render_rank_as_text(self, event: AstrMessageEvent, filtered_data: List[tuple], 
+                                 group_info: GroupInfo, title: str, config: PluginConfig):
+        """渲染排行榜为文字模式"""
+        text_msg = self._generate_text_message(filtered_data, group_info, title, config)
+        yield event.plain_result(text_msg)
+    
+    def _get_time_period_for_rank_type(self, rank_type: RankType) -> tuple:
+        """获取排行榜类型对应的时间段
         
         Args:
-            group_data (List[UserData]): 原始用户数据列表
             rank_type (RankType): 排行榜类型
             
         Returns:
-            List[tuple]: 包含(UserData, sort_value)元组的列表，sort_value用于排序
+            tuple: (start_date, end_date, period_name)，如果不需要时间段过滤则返回(None, None, None)
         """
         current_date = datetime.now().date()
+        
+        if rank_type == RankType.TOTAL:
+            return None, None, "total"
+        elif rank_type == RankType.DAILY:
+            return current_date, current_date, "daily"
+        elif rank_type == RankType.WEEKLY:
+            # 获取本周开始日期(周一)
+            days_since_monday = current_date.weekday()
+            week_start = current_date - timedelta(days=days_since_monday)
+            return week_start, current_date, "weekly"
+        elif rank_type == RankType.MONTHLY:
+            # 获取本月开始日期
+            month_start = current_date.replace(day=1)
+            return month_start, current_date, "monthly"
+        else:
+            return None, None, "unknown"
+    
+    async def _filter_data_by_rank_type(self, group_data: List[UserData], rank_type: RankType) -> List[tuple]:
+        """根据排行榜类型筛选数据并计算时间段内的发言次数 - 重构版本"""
+        start_date, end_date, period_name = self._get_time_period_for_rank_type(rank_type)
         
         if rank_type == RankType.TOTAL:
             # 总榜：返回每个用户及其总发言数的元组，但过滤掉从未发言的用户
             return [(user, user.message_count) for user in group_data if user.message_count > 0]
         
-        elif rank_type == RankType.DAILY:
-            # 今日榜：计算今日发言次数
-            filtered_users = []
-            for user in group_data:
-                if not user.history:
-                    continue
-                
-                # 计算今日发言次数
-                today_count = user.get_message_count_in_period(current_date, current_date)
-                if today_count > 0:
-                    # 返回元组：(UserData, 今日发言数)
-                    filtered_users.append((user, today_count))
+        # 时间段过滤：统一处理日/周/月榜
+        filtered_users = []
+        for user in group_data:
+            if not user.history:
+                continue
             
-            return filtered_users
+            # 计算指定时间段的发言次数
+            period_count = user.get_message_count_in_period(start_date, end_date)
+            if period_count > 0:
+                filtered_users.append((user, period_count))
         
-        elif rank_type == RankType.WEEKLY:
-            # 本周榜：计算本周发言次数
-            filtered_users = []
-            
-            # 获取本周开始日期(周一)
-            days_since_monday = current_date.weekday()
-            week_start = current_date - timedelta(days=days_since_monday)
-            
-            for user in group_data:
-                if not user.history:
-                    continue
-                
-                # 计算本周发言次数
-                week_count = user.get_message_count_in_period(week_start, current_date)
-                if week_count > 0:
-                    # 返回元组：(UserData, 本周发言数)
-                    filtered_users.append((user, week_count))
-            
-            return filtered_users
-        
-        elif rank_type == RankType.MONTHLY:
-            # 本月榜：计算本月发言次数
-            filtered_users = []
-            
-            # 获取本月开始日期
-            month_start = current_date.replace(day=1)
-            
-            for user in group_data:
-                if not user.history:
-                    continue
-                
-                # 计算本月发言次数
-                month_count = user.get_message_count_in_period(month_start, current_date)
-                if month_count > 0:
-                    # 返回元组：(UserData, 本月发言数)
-                    filtered_users.append((user, month_count))
-            
-            return filtered_users
-        
-        # 默认情况：返回原始数据，但过滤掉0次发言的用户
-        return [(user, user.message_count) for user in group_data if user.message_count > 0]
+        return filtered_users
     
     def _generate_title(self, rank_type: RankType) -> str:
         """生成标题"""
