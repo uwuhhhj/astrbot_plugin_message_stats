@@ -376,8 +376,8 @@ class DataManager:
         try:
             file_path = self.groups_dir / f"{group_id}.json"
             
-            if file_path.exists():
-                file_path.unlink()
+            if await aiofiles.os.path.exists(file_path):
+                await aiofiles.os.remove(file_path)
             
             # 清除缓存
             cache_key = f"group_data_{group_id}"
@@ -656,6 +656,8 @@ class DataManager:
             self.logger.error(f"获取缓存统计时发生未知错误: {e}")
             return {}
     
+    # 移除重复的get_cache_statistics方法，统一使用get_cache_stats
+    
     # ========== 统计功能 ==========
     
     async def get_group_statistics(self, group_id: str) -> Dict[str, Any]:
@@ -836,7 +838,7 @@ class DataManager:
             users = await self.get_group_data(group_id)
             return {
                 "group_id": group_id,
-                "export_time": asyncio.get_running_loop().time(),
+                "export_time": time.time(),
                 "users": [user.to_dict() for user in users],
                 "statistics": await self.get_group_statistics(group_id)
             }
@@ -989,14 +991,4 @@ class DataManager:
             self.logger.error(f"备份群组 {group_id} 数据时发生未知错误: {e}")
             return None
     
-    def get_cache_statistics(self) -> Dict[str, Any]:
-        """获取缓存统计信息
-        
-        Returns:
-            Dict[str, Any]: 缓存统计信息
-        """
-        return self.cache_manager.get_cache_stats()
-    
-    def clear_all_caches(self):
-        """清理所有缓存"""
-        self.cache_manager.clear_all_caches()
+    # 移除重复的方法，统一使用cache_manager的方法

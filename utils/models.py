@@ -338,10 +338,10 @@ class UserData:
                         # 跳过格式错误的日期记录，但记录警告
                         logger.warning(f"跳过格式错误的日期记录 '{hist_str}': {e}")
                         continue
-            except TypeError:
-                # 如果history不是可迭代对象，跳过但记录警告
-                logger.warning(f"history字段类型错误，不是可迭代对象: {type(data.get('history'))}")
-                pass
+            except TypeError as e:
+                # 如果history不是可迭代对象，跳过但记录更详细的警告
+                logger.warning(f"history字段类型错误，不是可迭代对象: {type(data.get('history'))}, 错误: {e}")
+                # 不使用pass，而是记录具体的错误信息
         
         return user_data
     

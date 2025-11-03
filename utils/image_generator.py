@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import aiofiles
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
@@ -773,9 +774,9 @@ class ImageGenerator:
                     self.logger.debug("使用缓存的Jinja2模板对象")
                     # Jinja2 Template对象没有source属性，需要重新获取源代码
                     # 重新从文件加载以获取源代码
-                    if self.template_path.exists():
-                        loop = asyncio.get_event_loop()
-                        content = await loop.run_in_executor(None, self._read_file_sync, self.template_path)
+                    if await aiofiles.os.path.exists(self.template_path):
+                        async with aiofiles.open(self.template_path, 'r', encoding='utf-8') as f:
+                            content = await f.read()
                         return content
                     else:
                         # 如果文件不存在，返回默认模板
@@ -785,9 +786,9 @@ class ImageGenerator:
                     return cached_template if isinstance(cached_template, str) else str(cached_template)
             
             # 缓存未命中，从文件加载
-            if self.template_path.exists():
-                loop = asyncio.get_event_loop()
-                content = await loop.run_in_executor(None, self._read_file_sync, self.template_path)
+            if await aiofiles.os.path.exists(self.template_path):
+                async with aiofiles.open(self.template_path, 'r', encoding='utf-8') as f:
+                    content = await f.read()
                 
                 # 检查模板是否使用Jinja2语法
                 if '{{' in content or '{%' in content:
@@ -1180,13 +1181,13 @@ class ImageGenerator:
             # Jinja2环境已经配置了缓存
             self.logger.info("批量生成优化已启用")
     
-    def _load_user_item_macro_template(self):
-        """加载用户条目宏模板"""
+    async def _load_user_item_macro_template(self):
+        """加载用户条目宏模板（异步版本）"""
         try:
             macro_path = Path(__file__).parent.parent / "templates" / "user_item_macro.html"
-            if macro_path.exists():
-                with open(macro_path, 'r', encoding='utf-8') as f:
-                    macro_content = f.read()
+            if await aiofiles.os.path.exists(macro_path):
+                async with aiofiles.open(macro_path, 'r', encoding='utf-8') as f:
+                    macro_content = await f.read()
                 
                 # 创建环境并加载宏模板
                 env = Environment(

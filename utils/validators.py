@@ -627,29 +627,12 @@ class Validators:
         if not allowed_base_path:
             return
         
-        try:
-            path_obj = Path(path)
-            allowed_path_obj = Path(allowed_base_path).resolve()
-            
-            # 检查路径是否在允许的基础路径内
-            if not path_obj.is_relative_to(allowed_path_obj) and path_obj != allowed_path_obj:
-                raise ValidationError("文件路径超出允许的目录范围")
-        except (OSError, ValueError, AttributeError):
-            # pathlib.is_relative_to 在 Python 3.9+ 可用
-            # 对于较老版本，使用兼容性检查
-            try:
-                path_obj = Path(path)
-                allowed_path_obj = Path(allowed_base_path).resolve()
-                
-                # 兼容性检查
-                try:
-                    path_obj.relative_to(allowed_path_obj)
-                except ValueError:
-                    # 如果无法获取相对路径，说明不在允许范围内
-                    if not str(path_obj).startswith(str(allowed_path_obj)) and path_obj != allowed_path_obj:
-                        raise ValidationError("文件路径超出允许的目录范围")
-            except (OSError, ValueError):
-                raise ValidationError("允许的基础路径无效")
+        path_obj = Path(path)
+        allowed_path_obj = Path(allowed_base_path).resolve()
+        
+        # 检查路径是否在允许的基础路径内
+        if not path_obj.is_relative_to(allowed_path_obj) and path_obj != allowed_path_obj:
+            raise ValidationError("文件路径超出允许的目录范围")
     
     @staticmethod
     def _validate_extensions(path: str, allowed_extensions: Optional[List[str]]) -> None:

@@ -4,6 +4,7 @@ HTML模板模块
 """
 
 import aiofiles
+import aiofiles.os
 from pathlib import Path
 from astrbot.api import logger
 
@@ -91,8 +92,12 @@ def get_default_template() -> str:
 </html>
 """
 
-def template_exists() -> bool:
-    """检查模板文件是否存在"""
-    return RANK_TEMPLATE_PATH.exists()
+async def template_exists() -> bool:
+    """异步检查模板文件是否存在"""
+    try:
+        return await aiofiles.os.path.exists(RANK_TEMPLATE_PATH)
+    except Exception as e:
+        logger.warning(f"检查模板文件存在性失败: {e}")
+        return False
 
 # 移除冗余的load_template函数，统一使用get_rank_template()

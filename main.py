@@ -249,8 +249,14 @@ class MessageStatsPlugin(Star):
             else:
                 self.logger.error(f"记录消息统计失败: {nickname}")
             
-        except (ValueError, TypeError, KeyError) as e:
-            self.logger.error(f"记录消息统计失败: {e}")
+        except ValueError as e:
+            self.logger.error(f"记录消息统计失败(参数验证错误): {e}", exc_info=True)
+        except TypeError as e:
+            self.logger.error(f"记录消息统计失败(类型错误): {e}", exc_info=True)
+        except KeyError as e:
+            self.logger.error(f"记录消息统计失败(数据格式错误): {e}", exc_info=True)
+        except Exception as e:
+            self.logger.error(f"记录消息统计失败(未知错误): {e}", exc_info=True)
     
     # ========== 排行榜命令 ==========
     
@@ -281,8 +287,17 @@ class MessageStatsPlugin(Star):
             
             yield event.plain_result(f"已记录 {user_name} 的发言统计！")
             
-        except (AttributeError, KeyError, TypeError) as e:
-            self.logger.error(f"更新发言统计失败: {e}")
+        except AttributeError as e:
+            self.logger.error(f"更新发言统计失败(属性错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except KeyError as e:
+            self.logger.error(f"更新发言统计失败(数据格式错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except TypeError as e:
+            self.logger.error(f"更新发言统计失败(类型错误): {e}", exc_info=True)
+            yield event.plain_result("更新发言统计失败,请稍后重试")
+        except Exception as e:
+            self.logger.error(f"更新发言统计失败(未知错误): {e}", exc_info=True)
             yield event.plain_result("更新发言统计失败,请稍后重试")
     
     @filter.command("发言榜")
@@ -345,8 +360,8 @@ class MessageStatsPlugin(Star):
             # 验证数量
             try:
                 count = int(args[0])
-                if count <= 0 or count > 100:
-                    yield event.plain_result("数量必须在1-100之间！")
+                if count < self.RANK_COUNT_MIN or count > self.RANK_COUNT_MAX:
+                    yield event.plain_result(f"数量必须在{self.RANK_COUNT_MIN}-{self.RANK_COUNT_MAX}之间！")
                     return
             except ValueError:
                 yield event.plain_result("数量必须是数字！")
@@ -359,13 +374,24 @@ class MessageStatsPlugin(Star):
             
             yield event.plain_result(f"排行榜显示人数已设置为 {count} 人！")
             
-        except (ValueError, TypeError, KeyError) as e:
-            self.logger.error(f"设置排行榜数量失败: {e}")
+        except ValueError as e:
+            self.logger.error(f"设置排行榜数量失败(参数错误): {e}", exc_info=True)
+            yield event.plain_result("设置失败,请稍后重试")
+        except TypeError as e:
+            self.logger.error(f"设置排行榜数量失败(类型错误): {e}", exc_info=True)
+            yield event.plain_result("设置失败,请稍后重试")
+        except KeyError as e:
+            self.logger.error(f"设置排行榜数量失败(数据格式错误): {e}", exc_info=True)
+            yield event.plain_result("设置失败,请稍后重试")
+        except Exception as e:
+            self.logger.error(f"设置排行榜数量失败(未知错误): {e}", exc_info=True)
             yield event.plain_result("设置失败,请稍后重试")
     
-    # 图片模式常量定义
+    # 常量定义
     IMAGE_MODE_ENABLE_ALIASES = {'1', 'true', '开', 'on', 'yes'}
     IMAGE_MODE_DISABLE_ALIASES = {'0', 'false', '关', 'off', 'no'}
+    RANK_COUNT_MIN = 1
+    RANK_COUNT_MAX = 100
     
     @filter.command("设置发言榜图片")
     async def set_image_mode(self, event: AstrMessageEvent):
@@ -412,8 +438,17 @@ class MessageStatsPlugin(Star):
             
             yield event.plain_result(f"排行榜显示模式已设置为 {mode_text}！")
             
-        except (ValueError, TypeError, KeyError) as e:
-            self.logger.error(f"设置图片模式失败: {e}")
+        except ValueError as e:
+            self.logger.error(f"设置图片模式失败(参数错误): {e}", exc_info=True)
+            yield event.plain_result("设置失败,请稍后重试")
+        except TypeError as e:
+            self.logger.error(f"设置图片模式失败(类型错误): {e}", exc_info=True)
+            yield event.plain_result("设置失败,请稍后重试")
+        except KeyError as e:
+            self.logger.error(f"设置图片模式失败(数据格式错误): {e}", exc_info=True)
+            yield event.plain_result("设置失败,请稍后重试")
+        except Exception as e:
+            self.logger.error(f"设置图片模式失败(未知错误): {e}", exc_info=True)
             yield event.plain_result("设置失败,请稍后重试")
     
     @filter.command("清除发言榜单")
@@ -456,8 +491,17 @@ class MessageStatsPlugin(Star):
             else:
                 yield event.plain_result("该群没有缓存的成员信息！")
             
-        except (AttributeError, KeyError, TypeError) as e:
-            self.logger.error(f"刷新群成员缓存失败: {e}")
+        except AttributeError as e:
+            self.logger.error(f"刷新群成员缓存失败(属性错误): {e}", exc_info=True)
+            yield event.plain_result("刷新缓存失败,请稍后重试！")
+        except KeyError as e:
+            self.logger.error(f"刷新群成员缓存失败(数据格式错误): {e}", exc_info=True)
+            yield event.plain_result("刷新缓存失败,请稍后重试！")
+        except TypeError as e:
+            self.logger.error(f"刷新群成员缓存失败(类型错误): {e}", exc_info=True)
+            yield event.plain_result("刷新缓存失败,请稍后重试！")
+        except Exception as e:
+            self.logger.error(f"刷新群成员缓存失败(未知错误): {e}", exc_info=True)
             yield event.plain_result("刷新缓存失败,请稍后重试！")
     
     @filter.command("缓存状态")
@@ -485,8 +529,17 @@ class MessageStatsPlugin(Star):
             
             yield event.plain_result('\n'.join(status_msg))
             
-        except (ValueError, TypeError, KeyError) as e:
-            self.logger.error(f"显示缓存状态失败: {e}")
+        except ValueError as e:
+            self.logger.error(f"显示缓存状态失败(参数错误): {e}", exc_info=True)
+            yield event.plain_result("获取缓存状态失败,请稍后重试！")
+        except TypeError as e:
+            self.logger.error(f"显示缓存状态失败(类型错误): {e}", exc_info=True)
+            yield event.plain_result("获取缓存状态失败,请稍后重试！")
+        except KeyError as e:
+            self.logger.error(f"显示缓存状态失败(数据格式错误): {e}", exc_info=True)
+            yield event.plain_result("获取缓存状态失败,请稍后重试！")
+        except Exception as e:
+            self.logger.error(f"显示缓存状态失败(未知错误): {e}", exc_info=True)
             yield event.plain_result("获取缓存状态失败,请稍后重试！")
     
     # ========== 私有方法 ==========
@@ -921,7 +974,11 @@ class MessageStatsPlugin(Star):
         return filtered_users
     
     def _count_messages_in_period_fast(self, history: List, start_date, end_date) -> int:
-        """快速计算指定时间段内的消息数量（优化版本）"""
+        """快速计算指定时间段内的消息数量（优化版本）
+        
+        注意：此方法假设history列表按日期升序排列。如果历史记录未排序，
+        可能需要先调用sort()方法或使用_count_messages_in_period_unordered()方法。
+        """
         # 如果历史记录为空，直接返回0
         if not history:
             return 0
@@ -929,13 +986,29 @@ class MessageStatsPlugin(Star):
         # 对于较长的历史记录，使用更高效的算法
         count = 0
         for hist_date in history:
-            # 提前退出优化：如果历史记录按日期排序，可以提前跳出循环
+            # 转换为日期对象
             hist_date_obj = hist_date.to_date() if hasattr(hist_date, 'to_date') else hist_date
+            
+            # 检查是否在指定时间段内
             if hist_date_obj < start_date:
                 continue
             if hist_date_obj > end_date:
+                # 假设history按日期升序排列，可以提前跳出循环
                 break
             count += 1
+        
+        return count
+    
+    def _count_messages_in_period_unordered(self, history: List, start_date, end_date) -> int:
+        """计算指定时间段内的消息数量（适用于未排序的历史记录）"""
+        if not history:
+            return 0
+        
+        count = 0
+        for hist_date in history:
+            hist_date_obj = hist_date.to_date() if hasattr(hist_date, 'to_date') else hist_date
+            if start_date <= hist_date_obj <= end_date:
+                count += 1
         
         return count
     

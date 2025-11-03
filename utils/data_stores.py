@@ -5,10 +5,12 @@
 
 import json
 import aiofiles
+import aiofiles.os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from astrbot.api import logger as astrbot_logger
+from cachetools import TTLCache
 
 from .models import UserData, PluginConfig, MessageDate
 
@@ -61,26 +63,8 @@ class GroupDataStore:
             
             for user_data in user_data_list:
                 try:
-                    user = UserData(
-                        user_id=str(user_data.get('user_id', '')),
-                        nickname=user_data.get('nickname', '未知用户'),
-                        message_count=0  # 重置为0，通过重建历史来计算准确数量
-                    )
-                    
-                    # 重建历史记录
-                    history_data = user_data.get('history', [])
-                    for hist_item in history_data:
-                        try:
-                            if isinstance(hist_item, str):
-                                # 解析日期字符串 YYYY-MM-DD
-                                date_parts = hist_item.split('-')
-                                if len(date_parts) == 3:
-                                    year, month, day = map(int, date_parts)
-                                    message_date = MessageDate(year, month, day)
-                                    user.add_message(message_date)
-                        except (ValueError, TypeError):
-                            continue
-                    
+                    # 使用UserData.from_dict方法来消除逻辑重复
+                    user = UserData.from_dict(user_data)
                     users.append(user)
                 except (ValueError, TypeError) as e:
                     self.logger.warning(f"跳过无效的用户数据: {e}")
@@ -118,8 +102,8 @@ class GroupDataStore:
         file_path = self._get_group_file_path(group_id)
         
         try:
-            if file_path.exists():
-                file_path.unlink()
+            if await aiofiles.os.path.exists(file_path):
+                await aiofiles.os.remove(file_path)
                 return True
             return False
         except OSError as e:
@@ -225,7 +209,6 @@ class PluginCache:
         self.config_cache_ttl = 60  # 1分钟
         
         # 创建缓存实例
-        from cachetools import TTLCache
         self.data_cache = TTLCache(maxsize=self.data_cache_maxsize, ttl=self.data_cache_ttl)
         self.config_cache = TTLCache(maxsize=self.config_cache_maxsize, ttl=self.config_cache_ttl)
     
