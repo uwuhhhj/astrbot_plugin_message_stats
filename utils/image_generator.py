@@ -642,13 +642,34 @@ class ImageGenerator:
 </html>"""
     
     def _generate_user_item_html_safe(self, item_data: Dict[str, Any]) -> str:
-        """生成安全的用户条目HTML（优化版本）"""
+        """生成安全的用户条目HTML（使用Jinja2模板）"""
         # 使用元组和字典预构建减少字符串操作
         css_classes = self._get_css_classes(item_data)
         styles = self._get_item_styles(item_data)
         safe_content = self._get_safe_content(item_data)
         
-        # 使用字符串模板优化性能
+        # 准备模板数据
+        template_data = {
+            'rank': item_data['rank'],
+            'total': item_data['total'],
+            'percentage': item_data['percentage'],
+            'css_classes': css_classes,
+            'styles': styles,
+            'safe_content': safe_content
+        }
+        
+        # 使用Jinja2模板渲染，确保所有动态内容都经过转义
+        if JINJA2_AVAILABLE:
+            try:
+                if not hasattr(self, '_user_item_macro_template'):
+                    self._user_item_macro_template = self._load_user_item_macro_template()
+                
+                if self._user_item_macro_template:
+                    return self._user_item_macro_template.render(item_data=template_data)
+            except Exception as e:
+                self.logger.warning(f"Jinja2模板渲染失败，使用备用方案: {e}")
+        
+        # 备用方案：使用安全的字符串格式化
         return f'''<div class="{css_classes['item']}" style="{styles['separator']}">
     <div class="rank-number" style="color: {styles['rank_color']}; font-weight: bold; font-size: 36px;">#{item_data['rank']}</div>
     <img class="avatar" src="{safe_content['avatar_url']}" style="border-color: {styles['avatar_border']};" />
@@ -741,22 +762,26 @@ class ImageGenerator:
         return service_url.format(user_id=user_id, avatar_id=int(user_id) % 5)
     
     async def _load_html_template(self) -> str:
-        """加载HTML模板（使用缓存优化）"""
+        """加载HTML模板（修复缓存逻辑）"""
         try:
             # 首先尝试从缓存获取
             cached_template = await self._get_cached_template()
             if cached_template:
-                # 如果缓存的是Jinja2模板对象，需要重新读取文件内容
+                # 如果缓存的是Jinja2模板对象，返回模板的源代码字符串
                 if JINJA2_AVAILABLE and isinstance(cached_template, Template):
-                    # 重新从文件加载原始字符串内容
+                    # 缓存命中，获取模板的源代码
+                    self.logger.debug("使用缓存的Jinja2模板对象")
+                    # Jinja2 Template对象没有source属性，需要重新获取源代码
+                    # 重新从文件加载以获取源代码
                     if self.template_path.exists():
                         loop = asyncio.get_event_loop()
                         content = await loop.run_in_executor(None, self._read_file_sync, self.template_path)
                         return content
                     else:
-                        default_template = await self._get_default_template()
-                        return default_template
+                        # 如果文件不存在，返回默认模板
+                        return await self._get_default_template()
                 else:
+                    # 缓存的是字符串，直接返回
                     return cached_template if isinstance(cached_template, str) else str(cached_template)
             
             # 缓存未命中，从文件加载
@@ -767,6 +792,13 @@ class ImageGenerator:
                 # 检查模板是否使用Jinja2语法
                 if '{{' in content or '{%' in content:
                     self.logger.info("检测到Jinja2模板语法")
+                    # 如果是Jinja2模板，创建模板对象并缓存
+                    if JINJA2_AVAILABLE:
+                        try:
+                            template_obj = Template(content)
+                            await self._cache_template(template_obj)
+                        except Exception as e:
+                            self.logger.warning(f"创建Jinja2模板对象失败: {e}")
                 else:
                     self.logger.warning("模板未使用Jinja2语法，建议更新为安全模板")
                 
@@ -1147,4 +1179,23 @@ class ImageGenerator:
         if self.jinja_env:
             # Jinja2环境已经配置了缓存
             self.logger.info("批量生成优化已启用")
+    
+    def _load_user_item_macro_template(self):
+        """加载用户条目宏模板"""
+        try:
+            macro_path = Path(__file__).parent.parent / "templates" / "user_item_macro.html"
+            if macro_path.exists():
+                with open(macro_path, 'r', encoding='utf-8') as f:
+                    macro_content = f.read()
+                
+                # 创建环境并加载宏模板
+                env = Environment(
+                    loader=FileSystemLoader(str(macro_path.parent)),
+                    autoescape=select_autoescape(['html', 'xml'])
+                )
+                return env.from_string(macro_content)
+        except Exception as e:
+            self.logger.warning(f"加载用户条目宏模板失败: {e}")
+        
+        return None
 

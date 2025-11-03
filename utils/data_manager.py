@@ -19,6 +19,7 @@ from astrbot.api import logger as astrbot_logger
 from collections import defaultdict
 
 from .models import UserData, PluginConfig, MessageDate
+from .data_stores import GroupDataStore, ConfigManager, PluginCache
 
 # 常量定义
 DATA_CACHE_MAXSIZE = 1000
@@ -28,27 +29,14 @@ CONFIG_CACHE_TTL = 60  # 1分钟
 
 
 class DataManager:
-    """数据管理器
+    """数据管理器（重构版本）
     
-    负责插件的数据存储、读取、缓存和管理。支持群组数据管理、配置管理、缓存管理等功能。
+    协调各个专门的组件，提供统一的数据管理接口。
+    将原来的单一职责拆分为多个专门的组件：
+    - GroupDataStore: 群组数据存储
+    - ConfigManager: 配置管理
+    - PluginCache: 缓存管理
     
-    主要功能:
-        - 群组数据的增删改查
-        - 插件配置的读取和保存
-        - 多层缓存机制（数据缓存、配置缓存、图片缓存）
-        - 数据导入导出功能
-        - 旧数据清理和维护
-        - 异步文件操作
-        
-    Attributes:
-        data_dir (Path): 数据根目录路径
-        groups_dir (Path): 群组数据目录路径
-        cache_dir (Path): 缓存目录路径
-        config_file (Path): 配置文件路径
-        logger: 日志记录器
-        data_cache (TTLCache): 数据缓存，5分钟TTL
-        config_cache (TTLCache): 配置缓存，1分钟TTL
-        
     Example:
         >>> dm = DataManager("/path/to/data")
         >>> await dm.initialize()
@@ -65,20 +53,28 @@ class DataManager:
             raise ValueError("data_dir不能为None。请在插件初始化时提供正确的数据目录路径")
         else:
             self.data_dir = Path(data_dir)
+        
+        # 初始化各个组件
         self.groups_dir = self.data_dir / "groups"
-        self.cache_dir = self.data_dir / "cache" / "rank_images"
         self.config_file = self.data_dir / "config.json"
+        self.cache_dir = self.data_dir / "cache" / "rank_images"
+        
         self.logger = astrbot_logger
         
-        # 缓存设置 - 优化TTL设置
-        self.data_cache = TTLCache(maxsize=DATA_CACHE_MAXSIZE, ttl=DATA_CACHE_TTL)  # 5分钟缓存，提高性能
-        self.config_cache = TTLCache(maxsize=CONFIG_CACHE_MAXSIZE, ttl=CONFIG_CACHE_TTL)  # 1分钟缓存，平衡实时性和性能
+        # 初始化各个专门的组件
+        self.group_store = GroupDataStore(self.groups_dir, self.logger)
+        self.config_manager = ConfigManager(self.config_file, self.logger)
+        self.cache_manager = PluginCache(self.logger)
         
         # 群组级别的锁机制，防止并发安全问题
         self._group_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         
         # 确保目录存在
         self._ensure_directories()
+        
+        # 获取缓存实例的引用，方便使用
+        self.data_cache = self.cache_manager.get_data_cache()
+        self.config_cache = self.cache_manager.get_config_cache()
     
     def _ensure_directories(self):
         """确保所有必要的目录存在"""
@@ -248,58 +244,12 @@ class DataManager:
         if cache_key in self.data_cache:
             return self.data_cache[cache_key]
         
-        file_path = self.groups_dir / f"{group_id}.json"
+        # 使用GroupDataStore加载数据
+        users = await self.group_store.load_group_data(group_id)
         
-        try:
-            if file_path.exists():
-                async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                
-                # 验证JSON格式
-                if not self._validate_json_content(content):
-                    self.logger.warning(f"群组 {group_id} 数据文件格式异常，尝试修复")
-                    
-                    # 尝试修复损坏的数据
-                    repaired_data = await self._repair_corrupted_json(file_path, content)
-                    data_list = repaired_data
-                    if repaired_data:
-                        # 修复成功，重新保存数据
-                        self.logger.info(f"群组 {group_id} 数据修复成功")
-                        await self._save_json_safely(file_path, repaired_data)
-                    else:
-                        # 已创建新的空数据文件
-                        self.logger.info(f"群组 {group_id} 已创建新的空数据文件")
-                else:
-                    data_list = json.loads(content)
-                
-                # 转换为UserData对象
-                users = []
-                for user_data in data_list:
-                    try:
-                        user = UserData.from_dict(user_data)
-                        users.append(user)
-                    except (KeyError, TypeError, ValueError) as e:
-                        self.logger.warning(f"跳过无效的用户数据: {e}")
-                        continue
-                
-                # 缓存结果
-                self.data_cache[cache_key] = users
-                return users
-            else:
-                return []
-        
-        except (IOError, OSError) as e:
-            self.logger.error(f"读取群组 {group_id} 文件失败: {e}")
-            return []
-        except json.JSONDecodeError as e:
-            self.logger.error(f"解析群组 {group_id} JSON数据失败: {e}")
-            return []
-        except (KeyError, TypeError, ValueError) as e:
-            self.logger.error(f"群组 {group_id} 数据格式错误: {e}")
-            return []
-        except asyncio.TimeoutError as e:
-            self.logger.error(f"读取群组 {group_id} 数据超时: {e}")
-            return []
+        # 缓存结果
+        self.data_cache[cache_key] = users
+        return users
     
     async def save_group_data(self, group_id: str, users: List[UserData]):
         """保存群组数据
@@ -315,43 +265,22 @@ class DataManager:
             
         Raises:
             ValueError: 当group_id格式不正确时
-            IOError: 当文件写入失败时抛出
-            OSError: 当文件系统操作失败时抛出
         """
         if not group_id.isdigit():
             raise ValueError(f"群组ID必须是数字字符串，当前值: {group_id}")
         
-        file_path = self.groups_dir / f"{group_id}.json"
+        # 使用GroupDataStore保存数据
+        success = await self.group_store.save_group_data(group_id, users)
         
-        try:
-            # 转换为字典列表
-            data_list = [user.to_dict() for user in users]
+        if success:
+            # 清除缓存
+            cache_key = f"group_data_{group_id}"
+            if cache_key in self.data_cache:
+                del self.data_cache[cache_key]
             
-            # 确保目录存在
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # 安全保存数据
-            success = await self._save_json_safely(file_path, data_list)
-            
-            if success:
-                # 清除缓存
-                cache_key = f"group_data_{group_id}"
-                if cache_key in self.data_cache:
-                    del self.data_cache[cache_key]
-                
-                self.logger.info(f"群组 {group_id} 数据已安全保存，共 {len(users)} 个用户")
-            else:
-                self.logger.error(f"群组 {group_id} 数据保存失败")
-        
-        except (IOError, OSError) as e:
-            self.logger.error(f"保存群组 {group_id} 文件失败: {e}")
-        except (KeyError, TypeError, ValueError) as e:
-            self.logger.error(f"群组 {group_id} 数据格式错误: {e}")
-        except asyncio.TimeoutError as e:
-            self.logger.error(f"保存群组 {group_id} 数据超时: {e}")
-        except Exception as e:
-            self.logger.error(f"保存群组 {group_id} 数据时发生未知错误: {e}")
-            self.logger.error(f"详细错误: {traceback.format_exc()}")
+            self.logger.info(f"群组 {group_id} 数据已安全保存，共 {len(users)} 个用户")
+        else:
+            self.logger.error(f"群组 {group_id} 数据保存失败")
     
     async def update_user_message(self, group_id: str, user_id: str, nickname: str) -> bool:
         """更新用户消息统计
@@ -401,16 +330,18 @@ class DataManager:
                 
                 # 如果用户不存在，创建新用户
                 if not user_found:
+                    # 为新用户创建消息记录
+                    today = datetime.now().date()
+                    message_date = MessageDate.from_date(today)
+                    
                     new_user = UserData(
                         user_id=user_id,
                         nickname=nickname,
-                        message_count=1,
+                        message_count=0,  # 先设为0，add_message会增加到1
                         first_message_time=current_timestamp,
                         last_message_time=current_timestamp
                     )
-                    # 为新用户添加第一条消息记录
-                    today = datetime.now().date()
-                    message_date = MessageDate.from_date(today)
+                    # 添加第一条消息记录（这会将message_count增加到1）
                     new_user.add_message(message_date)
                     users.append(new_user)
                 
@@ -563,29 +494,18 @@ class DataManager:
         Raises:
             IOError: 当配置文件写入失败时抛出
         """
-        try:
-            config_data = config.to_dict()
-            
-            async with aiofiles.open(self.config_file, 'w', encoding='utf-8') as f:
-                json_content = json.dumps(config_data, ensure_ascii=False, indent=2)
-                await f.write(json_content)
-            
+        # 使用ConfigManager保存配置
+        success = await self.config_manager.save_config(config)
+        
+        if success:
             # 清除配置缓存
             cache_key = "plugin_config"
             if cache_key in self.config_cache:
                 del self.config_cache[cache_key]
             
             self.logger.info("插件配置已保存")
-            
-        except (IOError, OSError) as e:
-            self.logger.error(f"保存配置文件时文件操作失败: {e}")
-            raise
-        except (KeyError, TypeError, ValueError) as e:
-            self.logger.error(f"配置数据格式错误: {e}")
-            raise
-        except Exception as e:
-            self.logger.error(f"保存配置文件时发生未知错误: {e}")
-            raise
+        else:
+            raise IOError("保存配置文件失败")
     
     async def update_config(self, updates: Dict[str, Any]) -> bool:
         """更新配置
@@ -943,7 +863,17 @@ class DataManager:
             bool: 导入是否成功
         """
         try:
-            users_data = data.get("users", [])
+            # 处理不同的数据格式
+            if isinstance(data, list):
+                # 如果数据是列表格式，直接使用
+                users_data = data
+            elif isinstance(data, dict):
+                # 如果数据是字典格式，获取users字段
+                users_data = data.get("users", [])
+            else:
+                # 如果数据格式不正确，抛出异常
+                raise ValueError(f"不支持的数据格式: {type(data)}")
+            
             users = []
             
             for user_data in users_data:
@@ -1058,3 +988,15 @@ class DataManager:
         except Exception as e:
             self.logger.error(f"备份群组 {group_id} 数据时发生未知错误: {e}")
             return None
+    
+    def get_cache_statistics(self) -> Dict[str, Any]:
+        """获取缓存统计信息
+        
+        Returns:
+            Dict[str, Any]: 缓存统计信息
+        """
+        return self.cache_manager.get_cache_stats()
+    
+    def clear_all_caches(self):
+        """清理所有缓存"""
+        self.cache_manager.clear_all_caches()

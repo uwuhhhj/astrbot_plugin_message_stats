@@ -36,8 +36,11 @@ async def load_json_file(file_path: str) -> Dict[str, Any]:
 
 
 async def save_json_file(file_path: str, data: Dict[str, Any]) -> None:
-    """异步保存JSON文件，自动创建目录"""
-    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+    """异步保存JSON文件，自动创建目录（异步版本）"""
+    import aiofiles.os
+    
+    # 使用异步方式创建目录
+    await aiofiles.os.makedirs(Path(file_path).parent, exist_ok=True)
     
     async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
         await f.write(json.dumps(data, ensure_ascii=False, indent=2))

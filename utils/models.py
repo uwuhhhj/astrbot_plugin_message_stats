@@ -8,14 +8,13 @@
 - date_utils: 日期时间处理工具
 """
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 from enum import Enum
 
-# 配置日志
-logger = logging.getLogger(__name__)
+# 使用框架的日志记录器
+from astrbot.api import logger
 
 
 

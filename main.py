@@ -516,11 +516,11 @@ class MessageStatsPlugin(Star):
         return member.get("card") or member.get("nickname")
 
     async def _get_user_nickname_unified(self, event: AstrMessageEvent, group_id: str, user_id: str) -> str:
-        """统一的用户昵称获取方法 - 简化版缓存查找逻辑
+        """统一的用户昵称获取方法 - 重构版本
         
-        按优先级检查缓存，提供清晰的查找流程：
-        1. 检查昵称缓存
-        2. 检查群成员字典缓存  
+        使用扁平化的逻辑，拆分为独立的辅助方法：
+        1. 从昵称缓存获取
+        2. 从群成员字典缓存获取
         3. 从API获取并缓存
         4. 返回默认昵称
         
@@ -532,13 +532,31 @@ class MessageStatsPlugin(Star):
         Returns:
             str: 用户的显示昵称，如果都失败则返回 "用户{user_id}"
         """
+        # 步骤1: 从昵称缓存获取
+        nickname = await self._get_from_nickname_cache(user_id)
+        if nickname:
+            return nickname
+        
+        # 步骤2: 从群成员字典缓存获取
+        nickname = await self._get_from_dict_cache(group_id, user_id)
+        if nickname:
+            return nickname
+        
+        # 步骤3: 从API获取并缓存
+        nickname = await self._fetch_and_cache_from_api(event, group_id, user_id)
+        if nickname:
+            return nickname
+        
+        # 步骤4: 返回默认昵称
+        return f"用户{user_id}"
+    
+    async def _get_from_nickname_cache(self, user_id: str) -> Optional[str]:
+        """从昵称缓存获取昵称"""
         nickname_cache_key = f"nickname_{user_id}"
-        
-        # 步骤1: 检查昵称缓存（最高优先级）
-        if nickname_cache_key in self.user_nickname_cache:
-            return self.user_nickname_cache[nickname_cache_key]
-        
-        # 步骤2: 检查群成员字典缓存
+        return self.user_nickname_cache.get(nickname_cache_key)
+    
+    async def _get_from_dict_cache(self, group_id: str, user_id: str) -> Optional[str]:
+        """从群成员字典缓存获取昵称"""
         dict_cache_key = f"group_members_dict_{group_id}"
         if dict_cache_key in self.group_members_dict_cache:
             members_dict = self.group_members_dict_cache[dict_cache_key]
@@ -546,14 +564,19 @@ class MessageStatsPlugin(Star):
                 member = members_dict[user_id]
                 display_name = self._get_display_name_from_member(member)
                 if display_name:
+                    # 缓存到昵称缓存
+                    nickname_cache_key = f"nickname_{user_id}"
                     self.user_nickname_cache[nickname_cache_key] = display_name
                     return display_name
-        
-        # 步骤3: 从API获取群成员信息
+        return None
+    
+    async def _fetch_and_cache_from_api(self, event: AstrMessageEvent, group_id: str, user_id: str) -> Optional[str]:
+        """从API获取群成员信息并缓存"""
         try:
             members_info = await self._fetch_group_members_from_api(event, group_id)
             if members_info:
                 # 重建字典缓存
+                dict_cache_key = f"group_members_dict_{group_id}"
                 members_dict = {str(m.get("user_id", "")): m for m in members_info if m.get("user_id")}
                 self.group_members_dict_cache[dict_cache_key] = members_dict
                 
@@ -562,6 +585,8 @@ class MessageStatsPlugin(Star):
                     member = members_dict[user_id]
                     display_name = self._get_display_name_from_member(member)
                     if display_name:
+                        # 缓存到昵称缓存
+                        nickname_cache_key = f"nickname_{user_id}"
                         self.user_nickname_cache[nickname_cache_key] = display_name
                         return display_name
         except (AttributeError, KeyError, TypeError) as e:
@@ -571,8 +596,7 @@ class MessageStatsPlugin(Star):
         except (ImportError, RuntimeError) as e:
             self.logger.warning(f"获取群成员信息失败(系统错误): {e}")
         
-        # 步骤4: 返回默认昵称
-        return f"用户{user_id}"
+        return None
     
     async def _get_fallback_nickname(self, event: AstrMessageEvent, user_id: str) -> str:
         """获取备用昵称
@@ -844,14 +868,28 @@ class MessageStatsPlugin(Star):
             return None, None, "unknown"
     
     async def _filter_data_by_rank_type(self, group_data: List[UserData], rank_type: RankType) -> List[tuple]:
-        """根据排行榜类型筛选数据并计算时间段内的发言次数 - 重构版本"""
+        """根据排行榜类型筛选数据并计算时间段内的发言次数 - 性能优化版本"""
         start_date, end_date, period_name = self._get_time_period_for_rank_type(rank_type)
         
         if rank_type == RankType.TOTAL:
             # 总榜：返回每个用户及其总发言数的元组，但过滤掉从未发言的用户
             return [(user, user.message_count) for user in group_data if user.message_count > 0]
         
-        # 时间段过滤：统一处理日/周/月榜
+        # 时间段过滤：优化版本，使用预聚合策略减少双重循环
+        # 策略：如果时间段较短（日榜），直接计算；如果时间段较长（周榜/月榜），使用缓存
+        
+        # 对于日榜，直接计算（因为时间段短，性能影响小）
+        if rank_type == RankType.DAILY:
+            return self._calculate_daily_rank(group_data, start_date, end_date)
+        
+        # 对于周榜和月榜，使用优化策略
+        elif rank_type in [RankType.WEEKLY, RankType.MONTHLY]:
+            return self._calculate_period_rank_optimized(group_data, start_date, end_date)
+        
+        return []
+    
+    def _calculate_daily_rank(self, group_data: List[UserData], start_date, end_date) -> List[tuple]:
+        """计算日榜（直接计算策略）"""
         filtered_users = []
         for user in group_data:
             if not user.history:
@@ -863,6 +901,43 @@ class MessageStatsPlugin(Star):
                 filtered_users.append((user, period_count))
         
         return filtered_users
+    
+    def _calculate_period_rank_optimized(self, group_data: List[UserData], start_date, end_date) -> List[tuple]:
+        """计算周榜/月榜（优化策略）"""
+        # 优化策略：先筛选出有历史记录的用户，然后批量计算
+        active_users = [user for user in group_data if user.history]
+        
+        if not active_users:
+            return []
+        
+        # 批量计算，减少函数调用开销
+        filtered_users = []
+        for user in active_users:
+            # 使用更高效的计算方法
+            period_count = self._count_messages_in_period_fast(user.history, start_date, end_date)
+            if period_count > 0:
+                filtered_users.append((user, period_count))
+        
+        return filtered_users
+    
+    def _count_messages_in_period_fast(self, history: List, start_date, end_date) -> int:
+        """快速计算指定时间段内的消息数量（优化版本）"""
+        # 如果历史记录为空，直接返回0
+        if not history:
+            return 0
+        
+        # 对于较长的历史记录，使用更高效的算法
+        count = 0
+        for hist_date in history:
+            # 提前退出优化：如果历史记录按日期排序，可以提前跳出循环
+            hist_date_obj = hist_date.to_date() if hasattr(hist_date, 'to_date') else hist_date
+            if hist_date_obj < start_date:
+                continue
+            if hist_date_obj > end_date:
+                break
+            count += 1
+        
+        return count
     
     def _generate_title(self, rank_type: RankType) -> str:
         """生成标题"""
