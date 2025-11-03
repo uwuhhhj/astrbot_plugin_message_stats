@@ -13,8 +13,9 @@ import aiofiles
 import asyncio
 from datetime import datetime
 from cachetools import TTLCache
+from astrbot.api import logger as astrbot_logger
 
-from .models import UserData, PluginConfig
+from .models import UserData, PluginConfig, MessageDate
 
 
 class DataManager:
@@ -55,7 +56,7 @@ class DataManager:
         self.groups_dir = self.data_dir / "groups"
         self.cache_dir = self.data_dir / "cache" / "rank_images"
         self.config_file = self.data_dir / "config.json"
-        self.logger = self._get_logger()
+        self.logger = astrbot_logger
         
         # 缓存设置 - 优化TTL设置
         self.data_cache = TTLCache(maxsize=1000, ttl=300)  # 5分钟缓存，提高性能
@@ -63,11 +64,6 @@ class DataManager:
         
         # 确保目录存在
         self._ensure_directories()
-    
-    def _get_logger(self):
-        """获取日志记录器"""
-        import logging
-        return logging.getLogger(__name__)
     
     def _ensure_directories(self):
         """确保所有必要的目录存在"""
@@ -355,7 +351,6 @@ class DataManager:
             for user in users:
                 if user.user_id == user_id:
                     # 更新现有用户 - 使用add_message方法正确记录历史
-                    from .models import MessageDate
                     today = datetime.now().date()
                     message_date = MessageDate.from_date(today)
                     user.add_message(message_date)
@@ -375,7 +370,6 @@ class DataManager:
                     last_message_time=current_timestamp
                 )
                 # 为新用户添加第一条消息记录
-                from .models import MessageDate
                 today = datetime.now().date()
                 message_date = MessageDate.from_date(today)
                 new_user.add_message(message_date)

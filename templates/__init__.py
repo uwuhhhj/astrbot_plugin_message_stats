@@ -3,6 +3,7 @@ HTML模板模块
 包含用于生成排行榜图片的HTML模板
 """
 
+import aiofiles
 from pathlib import Path
 from astrbot.api import logger as logger
 
@@ -10,12 +11,12 @@ from astrbot.api import logger as logger
 TEMPLATE_DIR = Path(__file__).parent
 RANK_TEMPLATE_PATH = TEMPLATE_DIR / "rank_template.html"
 
-def get_rank_template() -> str:
+async def get_rank_template() -> str:
     """获取排行榜HTML模板"""
     try:
         if RANK_TEMPLATE_PATH.exists():
-            with open(RANK_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
-                return f.read()
+            async with aiofiles.open(RANK_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
+                return await f.read()
         else:
             # 返回默认模板
             return get_default_template()

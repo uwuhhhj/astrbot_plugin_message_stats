@@ -489,7 +489,8 @@ class MessageStatsPlugin(Star):
     
     async def _get_user_display_name(self, event: AstrMessageEvent, group_id: str, user_id: str) -> str:
         """获取用户的群昵称,优先使用群昵称,其次使用QQ昵称（重构版 - 使用统一缓存逻辑）"""
-        # 非QQ群聊事件直接使用备用方案
+        # 警告: 此处依赖了 Aiocqhttp 的特定事件实现，以便调用底层 API。
+        # 在其他平台适配器上可能无法获取详细的群成员信息。
         if not isinstance(event, AiocqhttpMessageEvent):
             return await self._get_fallback_nickname(event, user_id)
         
