@@ -17,6 +17,7 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 from pathlib import Path
 import aiofiles
+from croniter import croniter
 from astrbot.api import logger as astrbot_logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 # PlatformAdapterType 在 astrbot.api.event.filter 中
@@ -301,7 +302,7 @@ class TimerManager:
             self.logger.warning(f"⚠️ 以下群组缺少unified_msg_origin: {', '.join(missing_origins)}")
             self.logger.info("💡 解决方案: 在对应群组中发送任意消息以收集unified_msg_origin")
             self.logger.info("📝 定时任务仍会启动，但推送时会失败直到unified_msg_origin被收集")
-            self.logger.info("📋 提示: 可以使用 #手动推送发言榜 命令测试推送功能")
+            self.logger.info("📋 提示: 可以使用 #手动推送 命令测试推送功能")
         
         # 如果任务已在运行，先停止
         if self.timer_task and not self.timer_task.done():
@@ -672,38 +673,55 @@ class TimerManager:
         """验证时间格式
         
         Args:
-            time_str: 时间字符串，格式为"HH:MM"
+            time_str: 时间字符串，支持两种格式：
+                - 简单格式: "HH:MM" (每日指定时间推送)
+                - Cron格式: "0 9 * * *" (支持复杂的定时表达式)
             
         Returns:
             bool: 格式是否有效
         """
-        pattern = r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
-        return bool(re.match(pattern, time_str))
+        # 首先尝试 cron 格式
+        try:
+            croniter(time_str)
+            return True
+        except (ValueError, TypeError):
+            # cron 格式失败后尝试简单格式
+            pattern = r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+            return bool(re.match(pattern, time_str))
     
     def _calculate_next_push_time(self, push_time: str) -> datetime:
         """计算下次推送时间
         
         Args:
-            push_time: 推送时间，格式为"HH:MM"
+            push_time: 推送时间，支持两种格式：
+                - 简单格式: "HH:MM" (每日指定时间)
+                - Cron格式: "0 9 * * *" (支持复杂定时表达式)
             
         Returns:
             datetime: 下次推送时间
         """
         try:
-            # 解析时间
-            hour, minute = map(int, push_time.split(':'))
-            
             # 获取当前时间
             now = datetime.now()
             
-            # 创建目标时间
-            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            
-            # 如果今天的时间已过，则推到明天
-            if target_time <= now:
-                target_time += timedelta(days=1)
-            
-            return target_time
+            # 首先尝试使用 cron 格式
+            try:
+                cron = croniter(push_time, now)
+                next_time = cron.get_next(datetime)
+                return next_time
+            except (ValueError, TypeError):
+                # 如果 cron 格式失败，则使用简单格式 "HH:MM"
+                if not ':' in push_time:
+                    raise ValueError("不支持的时间格式")
+                
+                hour, minute = map(int, push_time.split(':'))
+                target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                
+                # 如果今天的时间已过，则推到明天
+                if target_time <= now:
+                    target_time += timedelta(days=1)
+                
+                return target_time
             
         except (ValueError, TypeError, OSError, IOError) as e:
             # 捕获计算推送时间时的数值、类型和系统错误

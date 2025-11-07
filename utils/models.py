@@ -370,7 +370,7 @@ class PluginConfig:
         auto_record_enabled (bool): 是否开启自动记录群成员发言统计
         detailed_logging_enabled (bool): 是否开启详细日志记录，关闭后隐藏"记录消息统计"等详细日志
         timer_enabled (bool): 是否启用定时推送功能
-        timer_push_time (str): 定时推送时间（HH:MM格式）
+        timer_push_time (str): 定时推送时间（支持HH:MM或cron格式，如"09:00"或"0 9 * * *"）
         timer_target_groups (List[str]): 定时推送目标群组ID列表
         timer_rank_type (str): 定时推送的排行榜类型
         
