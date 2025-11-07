@@ -42,6 +42,7 @@ except ImportError:
     astrbot_logger.warning("Playwright未安装，图片生成功能将不可用")
 
 from .models import UserData, GroupInfo, PluginConfig
+from .exception_handlers import safe_generation, safe_file_operation
 
 
 
@@ -222,6 +223,7 @@ class ImageGenerator:
                 'hit_rate': self._cache_hits / max(1, self._cache_hits + self._cache_misses)
             }
     
+    @safe_generation(default_return=None)
     async def initialize(self):
         """初始化图片生成器
         
@@ -278,7 +280,8 @@ class ImageGenerator:
         except ConnectionError as e:
             self.logger.error(f"浏览器连接失败: {e}")
             raise ImageGenerationError(f"浏览器连接失败: {e}")
-        except Exception as e:
+        except OSError as e:
+            # 捕获操作系统相关错误，如系统资源不足、进程启动失败等
             self.logger.error(f"初始化图片生成器失败: {e}")
             self.logger.error(f"详细错误: {traceback.format_exc()}")
             raise ImageGenerationError(f"初始化失败: {e}")
@@ -320,6 +323,7 @@ class ImageGenerator:
         except Exception as e:
             self.logger.error(f"清理图片生成器资源失败: {e}")
     
+    @safe_generation(default_return=None)
     async def generate_rank_image(self, 
                                  users: List[UserData], 
                                  group_info: GroupInfo, 
@@ -358,7 +362,7 @@ class ImageGenerator:
             # 截图
             await self.page.screenshot(path=temp_path, full_page=True)
             
-            return temp_path
+            return str(temp_path)
         
         except FileNotFoundError as e:
             self.logger.error(f"临时文件或资源未找到: {e}")
@@ -369,7 +373,8 @@ class ImageGenerator:
         except TimeoutError as e:
             self.logger.error(f"浏览器操作超时: {e}")
             raise ImageGenerationError(f"操作超时: {e}")
-        except Exception as e:
+        except RuntimeError as e:
+            # 捕获浏览器运行时错误，如页面渲染失败、JavaScript执行错误等
             self.logger.error(f"生成排行榜图片失败: {e}")
             self.logger.error(f"详细错误: {traceback.format_exc()}")
             raise ImageGenerationError(f"生成图片失败: {e}")
@@ -382,6 +387,7 @@ class ImageGenerator:
             # 注意：不在这里删除临时文件，让调用方负责清理
             # 以避免在返回路径后立即删除文件的问题
     
+    @safe_generation(default_return="")
     async def _generate_html(self, 
                       users: List[UserData], 
                       group_info: GroupInfo, 
@@ -508,8 +514,9 @@ class ImageGenerator:
             # 使用安全的备用方法
             fallback_template = await self._get_fallback_template()
             return self._render_fallback_template(fallback_template, template_data, user_items)
-        except Exception as e:
-            self.logger.error(f"HTML模板渲染失败，未预期的错误: {e}")
+        except UnicodeDecodeError as e:
+            # 捕获模板文件编码错误，如UTF-8解码失败、字符编码问题等
+            self.logger.error(f"HTML模板渲染失败，编码错误: {e}")
             # 使用安全的备用方法
             fallback_template = await self._get_fallback_template()
             return self._render_fallback_template(fallback_template, template_data, user_items)
@@ -635,8 +642,9 @@ class ImageGenerator:
     <p>暂无数据</p>
 </body>
 </html>"""
-        except Exception as e:
-            self.logger.error(f"空数据HTML模板渲染失败，未预期的错误: {e}")
+        except UnicodeDecodeError as e:
+            # 捕获空数据模板编码错误，如UTF-8解码失败、字符编码问题等
+            self.logger.error(f"空数据HTML模板渲染失败，编码错误: {e}")
             # 回退到最简单的HTML
             return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -831,6 +839,7 @@ class ImageGenerator:
         service_url = avatar_services.get(platform, avatar_services["default"])
         return service_url.format(user_id=user_id, avatar_id=int(user_id) % 5)
     
+    @safe_file_operation(default_return="")
     async def _load_html_template(self) -> str:
         """加载HTML模板（简化缓存逻辑）"""
         try:
@@ -1233,7 +1242,8 @@ class ImageGenerator:
         except ConnectionError as e:
             self.logger.error(f"浏览器连接失败: {e}")
             return False
-        except Exception as e:
+        except RuntimeError as e:
+            # 捕获浏览器运行时错误，如页面操作失败、JavaScript执行错误等
             self.logger.error(f"测试浏览器连接失败: {e}")
             return False
     
@@ -1255,7 +1265,8 @@ class ImageGenerator:
             return {"status": "error", "error": f"权限不足: {e}"}
         except ConnectionError as e:
             return {"status": "error", "error": f"连接失败: {e}"}
-        except Exception as e:
+        except RuntimeError as e:
+            # 捕获浏览器信息获取时的运行时错误，如页面操作失败、资源访问错误等
             return {"status": "error", "error": str(e)}
     
     async def clear_cache(self):

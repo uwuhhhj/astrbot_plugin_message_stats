@@ -16,6 +16,13 @@ from cachetools import TTLCache
 from .models import UserData, PluginConfig, MessageDate
 
 
+# 缓存配置常量
+DATA_CACHE_MAXSIZE = 1000
+DATA_CACHE_TTL = 300  # 5分钟
+CONFIG_CACHE_MAXSIZE = 10
+CONFIG_CACHE_TTL = 60  # 1分钟
+
+
 class GroupDataStore:
     """群组数据存储管理器
     
@@ -206,8 +213,8 @@ class PluginCache:
     统一管理所有 TTLCache 实例（数据、配置、图片等）。
     """
     
-    def __init__(self, data_cache_maxsize=1000, data_cache_ttl=300, 
-                 config_cache_maxsize=10, config_cache_ttl=60, logger=None):
+    def __init__(self, data_cache_maxsize=DATA_CACHE_MAXSIZE, data_cache_ttl=DATA_CACHE_TTL, 
+                 config_cache_maxsize=CONFIG_CACHE_MAXSIZE, config_cache_ttl=CONFIG_CACHE_TTL, logger=None):
         self.logger = logger or astrbot_logger
         
         # 缓存设置

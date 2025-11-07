@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Dict, Any
 
 
+# 文件操作常量
+JSON_INDENT = 2
+ENCODING_UTF8 = 'utf-8'
+
+
 async def load_json_file(file_path: str) -> Dict[str, Any]:
     """异步加载JSON文件
     
@@ -26,7 +31,7 @@ async def load_json_file(file_path: str) -> Dict[str, Any]:
         IOError: 当文件读取失败时抛出
     """
     try:
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(file_path, 'r', encoding=ENCODING_UTF8) as f:
             content = await f.read()
             return await asyncio.to_thread(json.loads, content)
     except FileNotFoundError:
@@ -42,6 +47,6 @@ async def save_json_file(file_path: str, data: Dict[str, Any]) -> None:
     # 使用异步方式创建目录
     await aiofiles.os.makedirs(Path(file_path).parent, exist_ok=True)
     
-    async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
-        json_content = await asyncio.to_thread(json.dumps, data, ensure_ascii=False, indent=2)
+    async with aiofiles.open(file_path, 'w', encoding=ENCODING_UTF8) as f:
+        json_content = await asyncio.to_thread(json.dumps, data, ensure_ascii=False, indent=JSON_INDENT)
         await f.write(json_content)

@@ -332,7 +332,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="group-info">{{ group_name }}[{{ group_id }}]</div>
+            <div class="group-info">{{ group_name if group_name != group_id else "群" + group_id }}[{{ group_id }}]</div>
             <div class="title">{{ title }}</div>
             <div class="total-messages">总发言数：{{ total_messages }} 条</div>
         </div>
@@ -361,7 +361,7 @@
         
         <div class="footer">
             <p>🤖 由 AstrBot 发言统计插件生成</p>
-            <p>📅 生成时间: {{ current_time }}</p>
+            <p>生成时间: {{ current_time }}</p>
         </div>
     </div>
 </body>

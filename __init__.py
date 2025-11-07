@@ -1,12 +1,12 @@
 """
-AstrBot 群发言统计插件
-统计群成员发言次数，生成排行榜
+AstrBot 群发言统计插件 - 标准版
+统计群成员发言次数，生成排行榜，支持群成员发言统计和排行榜生成
 
 插件信息:
 - 名称: astrbot_plugin_message_stats
-- 显示名称: 群发言统计
-- 描述: 统计群成员发言次数，生成排行榜
-- 版本: 1.0
+- 显示名称: 群发言统计（标准版）
+- 描述: 统计群成员发言次数，生成排行榜，支持群成员发言统计和排行榜生成
+- 版本: 3.1.3
 - 作者: xiaoruange39
 
 功能特性:
@@ -15,6 +15,7 @@ AstrBot 群发言统计插件
 - 图片和文字两种显示模式
 - 完整的配置管理系统
 - 权限控制和安全管理
+- 手动查询排行榜功能
 
 使用方法:
 1. 将插件文件放置到 AstrBot 插件目录
@@ -58,9 +59,14 @@ AstrBot 群发言统计插件
 - 提供完整的错误处理机制
 """
 
-__version__ = "1.0"
+__version__ = "3.1.3"
 __author__ = "xiaoruange39"
-__description__ = "群发言统计插件，支持排行榜"
+__description__ = "群发言统计插件（标准版），支持排行榜和手动查询功能"
+
+# 配置常量
+ADMIN_RESTRICTION_DISABLED = 0
+DEFAULT_RANK_SIZE = 20
+PICTURE_MODE_ENABLED = 1
 
 # 导出主要组件
 from .main import MessageStatsPlugin
@@ -68,7 +74,7 @@ from .main import MessageStatsPlugin
 # 插件元数据
 PLUGIN_INFO = {
     "name": "astrbot_plugin_message_stats",
-    "display_name": "群发言统计",
+    "display_name": "群发言统计（标准版）",
     "description": __description__,
     "version": __version__,
     "author": __author__,
@@ -78,29 +84,32 @@ PLUGIN_INFO = {
 
 # 插件配置默认值
 DEFAULT_CONFIG = {
-    "auto_record_enabled": True,
-    "rand": 20,
-    "if_send_pic": 1
+    "is_admin_restricted": ADMIN_RESTRICTION_DISABLED,
+    "rand": DEFAULT_RANK_SIZE,
+    "if_send_pic": PICTURE_MODE_ENABLED,
+    "auto_record_enabled": True
 }
 
 # 支持的命令列表
 SUPPORTED_COMMANDS = [
-    "发言榜", "水群榜", "B话榜",
-    "今日发言榜", "本周发言榜", "本月发言榜",
-    "发言榜设置",
-    "设置发言榜数量", "设置发言榜图片",
-    "清除发言榜单"
+    "排行榜", "日榜", "周榜", "月榜",
+    "定时状态", "手动推送",
+    "设置定时时间", "设置定时群组", "删除定时群组",
+    "启用定时", "禁用定时", "设置定时类型",
+    "配置同步状态", "同步配置",
+    "设置显示人数", "设置图片模式",
+    "清除数据"
 ]
 
 # 权限要求
 PERMISSION_REQUIREMENTS = {
     "admin_only": [
-        "设置发言榜数量", "设置发言榜图片", "清除发言榜单"
+        "设置显示人数", "设置图片模式", "清除数据", "同步配置",
+        "设置定时时间", "设置定时群组", "删除定时群组", "启用定时", "禁用定时", "设置定时类型"
     ],
     "public": [
-        "发言榜", "水群榜", "B话榜",
-        "今日发言榜", "本周发言榜", "本月发言榜",
-        "发言榜设置"
+        "排行榜", "日榜", "周榜", "月榜",
+        "定时状态", "手动推送", "配置同步状态"
     ]
 }
 
@@ -129,13 +138,13 @@ def get_plugin_info():
 def get_default_config():
     """获取默认配置
     
-    返回插件的默认配置参数，包括自动记录开关、显示人数和图片模式等。
+    返回插件的默认配置参数，包括基本设置项。
     
     Returns:
         Dict[str, Any]: 默认配置字典，包含以下键：
-            - auto_record_enabled: 是否启用自动记录（默认True）
+            - is_admin_restricted: 是否限制管理员操作（默认0）
             - rand: 排行榜显示人数（默认20）
-            - if_send_pic: 是否发送图片（默认1，图片模式）
+            - send_pic: 是否发送图片（默认1，图片模式）
             
     Example:
         >>> config = get_default_config()

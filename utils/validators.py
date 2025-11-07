@@ -18,6 +18,37 @@ except ImportError:
     bleach = None
 
 
+# 验证常量定义
+GROUP_ID_MIN_LENGTH = 5
+GROUP_ID_MAX_LENGTH = 12
+
+USER_ID_MIN_LENGTH = 1
+USER_ID_MAX_LENGTH = 20
+
+NICKNAME_MAX_LENGTH = 50
+
+IMAGE_MODE_TEXT = 0
+IMAGE_MODE_IMAGE = 1
+
+RANK_LIMIT_MIN = 5
+RANK_LIMIT_MAX = 50
+RANK_LIMIT_DEFAULT = 20
+
+MESSAGE_CONTENT_MAX_LENGTH = 200
+
+FILE_PATH_MAX_LENGTH = 500
+
+# 危险字符列表
+DANGEROUS_CHARS = ['<', '>', ':', '"', '|', '?', '*', '\x00', '\x0a', '\x0d']
+
+# 报告类型
+VALID_REPORT_TYPES = ['daily', 'weekly', 'monthly']
+
+# 图片模式字符串映射
+TEXT_MODE_STRINGS = ['0', 'false', '否', '关', '关闭', '文字', 'text']
+IMAGE_MODE_STRINGS = ['1', 'true', '是', '开', '开启', '图片', 'image', '图片模式']
+
+
 
 
 class ValidationError(Exception):
@@ -85,8 +116,8 @@ class Validators:
             raise ValidationError("群组ID必须是数字")
         
         # 检查长度
-        if len(group_id_str) < 5 or len(group_id_str) > 12:
-            raise ValidationError("群组ID长度应在5-12位之间")
+        if len(group_id_str) < GROUP_ID_MIN_LENGTH or len(group_id_str) > GROUP_ID_MAX_LENGTH:
+            raise ValidationError(f"群组ID长度应在{GROUP_ID_MIN_LENGTH}-{GROUP_ID_MAX_LENGTH}位之间")
         
         return group_id_str
     
@@ -122,8 +153,8 @@ class Validators:
             raise ValidationError("用户ID必须是数字")
         
         # 检查长度 - 放宽限制，支持各种长度的用户ID
-        if len(user_id_str) < 1 or len(user_id_str) > 20:
-            raise ValidationError("用户ID长度应在1-20位之间")
+        if len(user_id_str) < USER_ID_MIN_LENGTH or len(user_id_str) > USER_ID_MAX_LENGTH:
+            raise ValidationError(f"用户ID长度应在{USER_ID_MIN_LENGTH}-{USER_ID_MAX_LENGTH}位之间")
         
         return user_id_str
     
@@ -157,8 +188,8 @@ class Validators:
         if len(nickname_str) == 0:
             raise ValidationError("昵称不能为空")
         
-        if len(nickname_str) > 50:
-            raise ValidationError("昵称长度不能超过50个字符")
+        if len(nickname_str) > NICKNAME_MAX_LENGTH:
+            raise ValidationError(f"昵称长度不能超过{NICKNAME_MAX_LENGTH}个字符")
         
         # 使用HTML转义
         return html.escape(nickname_str)
@@ -218,15 +249,13 @@ class Validators:
             'weekly'
             >>> Validators.validate_report_type("invalid")  # 抛出异常
         """
-        valid_types = ['daily', 'weekly', 'monthly']
-        
         if not report_type:
             raise ValidationError("报告类型不能为空")
         
         report_type = report_type.lower().strip()
         
-        if report_type not in valid_types:
-            raise ValidationError(f"报告类型错误，可选值：{', '.join(valid_types)}")
+        if report_type not in VALID_REPORT_TYPES:
+            raise ValidationError(f"报告类型错误，可选值：{', '.join(VALID_REPORT_TYPES)}")
         
         return report_type
     
@@ -259,7 +288,7 @@ class Validators:
             >>> Validators.validate_image_mode("invalid")  # 抛出异常
         """
         if mode is None:
-            return 1  # 默认图片模式
+            return IMAGE_MODE_IMAGE  # 默认图片模式
         
         # 转换为字符串并清理
         mode_str = str(mode).lower().strip()
@@ -267,21 +296,19 @@ class Validators:
         # 数字模式
         if mode_str.isdigit():
             mode_int = int(mode_str)
-            if mode_int not in [0, 1]:
-                raise ValidationError("图片模式必须是 0（文字）或 1（图片）")
+            if mode_int not in [IMAGE_MODE_TEXT, IMAGE_MODE_IMAGE]:
+                raise ValidationError(f"图片模式必须是 {IMAGE_MODE_TEXT}（文字）或 {IMAGE_MODE_IMAGE}（图片）")
             return mode_int
         
         # 文字模式
-        text_modes = ['0', 'false', '否', '关', '关闭', '文字', 'text']
-        if mode_str in text_modes:
-            return 0
+        if mode_str in TEXT_MODE_STRINGS:
+            return IMAGE_MODE_TEXT
         
         # 图片模式
-        image_modes = ['1', 'true', '是', '开', '开启', '图片', 'image', '图片模式']
-        if mode_str in image_modes:
-            return 1
+        if mode_str in IMAGE_MODE_STRINGS:
+            return IMAGE_MODE_IMAGE
         
-        raise ValidationError("图片模式参数错误，请使用 0（文字）或 1（图片）")
+        raise ValidationError(f"图片模式参数错误，请使用 {IMAGE_MODE_TEXT}（文字）或 {IMAGE_MODE_IMAGE}（图片）")
     
     @staticmethod
     def validate_rank_limit(limit: Any) -> int:
@@ -307,18 +334,18 @@ class Validators:
             >>> Validators.validate_rank_limit(100)  # 抛出异常
         """
         if limit is None:
-            return 20  # 默认值
+            return RANK_LIMIT_DEFAULT  # 默认值
         
         try:
             limit_int = int(limit)
         except (ValueError, TypeError):
             raise ValidationError("显示人数必须是数字")
         
-        if limit_int < 5:
-            raise ValidationError("显示人数不能少于5人")
+        if limit_int < RANK_LIMIT_MIN:
+            raise ValidationError(f"显示人数不能少于{RANK_LIMIT_MIN}人")
         
-        if limit_int > 50:
-            raise ValidationError("显示人数不能超过50人")
+        if limit_int > RANK_LIMIT_MAX:
+            raise ValidationError(f"显示人数不能超过{RANK_LIMIT_MAX}人")
         
         return limit_int
     
@@ -350,8 +377,8 @@ class Validators:
         if len(message_str) == 0:
             raise ValidationError("消息内容不能为空")
         
-        if len(message_str) > 200:
-            raise ValidationError("消息内容不能超过200个字符")
+        if len(message_str) > MESSAGE_CONTENT_MAX_LENGTH:
+            raise ValidationError(f"消息内容不能超过{MESSAGE_CONTENT_MAX_LENGTH}个字符")
         
         return message_str
     
@@ -580,11 +607,11 @@ class Validators:
             path_obj = Path(path)
             # 计算绝对路径的长度，这更准确地反映了实际的文件系统路径长度
             abs_path = str(path_obj.resolve())
-            if len(abs_path) > 500:
+            if len(abs_path) > FILE_PATH_MAX_LENGTH:
                 raise ValidationError("文件路径过长")
         except (OSError, ValueError):
             # 如果无法解析路径，直接检查原始路径长度
-            if len(path) > 500:
+            if len(path) > FILE_PATH_MAX_LENGTH:
                 raise ValidationError("文件路径过长")
     
     @staticmethod
@@ -607,8 +634,7 @@ class Validators:
             # 如果 pathlib 无法处理，使用原始路径进行检查
             clean_path = path
         
-        dangerous_chars = ['<', '>', ':', '"', '|', '?', '*', '\x00', '\x0a', '\x0d']
-        for char in dangerous_chars:
+        for char in DANGEROUS_CHARS:
             if char in clean_path:
                 raise ValidationError(f"文件路径包含危险字符: {char}")
     

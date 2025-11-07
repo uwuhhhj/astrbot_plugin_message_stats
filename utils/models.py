@@ -13,8 +13,13 @@ from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 from enum import Enum
 
-# 使用框架的日志记录器
-from astrbot.api import logger
+# 使用框架的日志记录器 - 使用可选导入避免测试环境问题
+try:
+    from astrbot.api import logger
+except ImportError:
+    # 测试环境或导入失败时使用标准logging
+    import logging
+    logger = logging.getLogger(__name__)
 
 
 
@@ -352,17 +357,22 @@ class UserData:
         return self.message_count < other.message_count  # 升序排列，用于sorted()函数
 
 
-@dataclass
 class PluginConfig:
-    """插件配置
+    """插件基本配置
     
-    存储插件的配置参数，包括显示设置和权限控制。
+    存储插件的基本配置参数，包括显示设置、权限控制和日志管理。
     支持数据序列化和反序列化，便于配置文件的读写。
     
     Attributes:
         is_admin_restricted (int): 是否限制管理员操作，0为不限制，1为限制
         rand (int): 排行榜显示人数，默认为20人
-        send_pic (int): 是否发送图片，0为文字模式，1为图片模式
+        if_send_pic (int): 是否发送图片，0为文字模式，1为图片模式（与Web Schema一致）
+        auto_record_enabled (bool): 是否开启自动记录群成员发言统计
+        detailed_logging_enabled (bool): 是否开启详细日志记录，关闭后隐藏"记录消息统计"等详细日志
+        timer_enabled (bool): 是否启用定时推送功能
+        timer_push_time (str): 定时推送时间（HH:MM格式）
+        timer_target_groups (List[str]): 定时推送目标群组ID列表
+        timer_rank_type (str): 定时推送的排行榜类型
         
     Methods:
         to_dict(): 转换为字典格式
@@ -371,22 +381,37 @@ class PluginConfig:
     Example:
         >>> config = PluginConfig()
         >>> config.rand = 15
-        >>> config.send_pic = 1
+        >>> config.detailed_logging_enabled = False  # 隐藏详细日志
     """
-    is_admin_restricted: int = 0
-    rand: int = 20
-    send_pic: int = 1
+    def __init__(self):
+        self.is_admin_restricted = 0
+        self.rand = 20
+        self.if_send_pic = 1
+        self.auto_record_enabled = True
+        self.detailed_logging_enabled = True  # 默认开启详细日志，便于调试
+        
+        # 定时功能配置
+        self.timer_enabled = False
+        self.timer_push_time = "09:00"
+        self.timer_target_groups = []
+        self.timer_rank_type = "daily"  # 默认推送今日排行榜
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典
         
         将PluginConfig实例转换为字典格式，便于JSON序列化。
+        与Web Schema保持一致的字段名，确保配置能够正确加载。
         
         Returns:
-            Dict[str, Any]: 包含配置数据的字典，包括：
+            Dict[str, Any]: 包含所有配置数据的字典，包括：
                 - is_admin_restricted: 管理员限制设置
                 - rand: 排行榜显示人数
-                - send_pic: 图片模式设置
+                - if_send_pic: 图片模式设置（与Schema一致）
+                - auto_record_enabled: 自动记录开关
+                - timer_enabled: 定时功能开关
+                - timer_push_time: 定时推送时间
+                - timer_target_groups: 定时推送群组
+                - timer_rank_type: 定时推送排行榜类型
                 
         Example:
             >>> config = PluginConfig()
@@ -397,32 +422,61 @@ class PluginConfig:
         return {
             "is_admin_restricted": self.is_admin_restricted,
             "rand": self.rand,
-            "send_pic": self.send_pic
+            "if_send_pic": self.if_send_pic,
+            "auto_record_enabled": self.auto_record_enabled,
+            "detailed_logging_enabled": self.detailed_logging_enabled,
+            "timer_enabled": self.timer_enabled,
+            "timer_push_time": self.timer_push_time,
+            "timer_target_groups": self.timer_target_groups,
+            "timer_rank_type": self.timer_rank_type
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'PluginConfig':
-        """从字典创建
+        """从字典创建基本配置
         
         从字典数据创建PluginConfig实例，使用默认值填充缺失字段。
+        支持字段名映射，兼容旧版本配置格式。
         
         Args:
-            data (Dict[str, Any]): 配置数据字典
+            data (Dict[str, Any]): 配置数据字典，可能包含：
+                - is_admin_restricted: 管理员限制设置
+                - rand: 排行榜显示人数
+                - if_send_pic: 图片模式设置（标准字段）
+                - send_pic: 图片模式设置（旧版本字段，兼容）
+                - auto_record_enabled: 自动记录开关
+                - timer_enabled: 定时功能开关
+                - timer_push_time: 定时推送时间
+                - timer_target_groups: 定时推送群组
+                - timer_rank_type: 定时推送排行榜类型
             
         Returns:
             PluginConfig: 对应的PluginConfig实例
             
         Example:
-            >>> data = {"rand": 15, "send_pic": 0}
+            >>> data = {"rand": 15, "if_send_pic": 0}
             >>> config = PluginConfig.from_dict(data)
             >>> print(config.rand)
             15
         """
-        return cls(
-            is_admin_restricted=data.get("is_admin_restricted", 0),
-            rand=data.get("rand", 20),
-            send_pic=data.get("send_pic", 1)
-        )
+        # 创建默认实例
+        config = cls()
+        
+        # 支持字段名映射 - if_send_pic是标准字段，send_pic是兼容字段
+        if_send_pic = data.get("if_send_pic", data.get("send_pic", 1))
+        
+        # 设置配置值
+        config.is_admin_restricted = data.get("is_admin_restricted", 0)
+        config.rand = data.get("rand", 20)
+        config.if_send_pic = if_send_pic
+        config.auto_record_enabled = data.get("auto_record_enabled", True)
+        config.detailed_logging_enabled = data.get("detailed_logging_enabled", True)
+        config.timer_enabled = data.get("timer_enabled", False)
+        config.timer_push_time = data.get("timer_push_time", "09:00")
+        config.timer_target_groups = data.get("timer_target_groups", [])
+        config.timer_rank_type = data.get("timer_rank_type", "daily")
+        
+        return config
 
 
 @dataclass

@@ -19,6 +19,7 @@ from collections import defaultdict
 
 from .models import UserData, PluginConfig, MessageDate
 from .data_stores import GroupDataStore, ConfigManager, PluginCache
+from .exception_handlers import safe_data_operation, safe_file_operation, safe_cache_operation, safe_config_operation, safe_calculation
 
 # 缓存配置常量
 # 这些常量控制DataManager中缓存的行为，修改这些值会影响整个插件的缓存性能
@@ -81,12 +82,23 @@ class DataManager:
         # 获取缓存实例的引用，方便使用
         self.data_cache = self.cache_manager.get_data_cache()
         self.config_cache = self.cache_manager.get_config_cache()
+        
+        # 添加对plugin_config的引用，用于日志控制
+        self.plugin_config = None
     
-    async def _ensure_directories(self):
+    def set_plugin_config(self, plugin_config):
+        """设置插件配置对象，用于日志控制
+        
+        Args:
+            plugin_config: PluginConfig实例
+        """
+        self.plugin_config = plugin_config
+    
+    def _ensure_directories(self):
         """确保所有必要的目录存在"""
         directories = [self.data_dir, self.groups_dir, self.cache_dir]
         for directory in directories:
-            await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
+            directory.mkdir(parents=True, exist_ok=True)
     
     async def initialize(self):
         """初始化数据管理器
@@ -114,9 +126,15 @@ class DataManager:
         self.logger.info("数据管理器初始化完成")
     
     async def _create_default_config(self):
-        """创建默认配置
+        """创建默认基本配置
         
-        创建插件的默认配置文件，包含所有必要的配置项和默认值。
+        创建插件的默认配置文件，包含所有基本配置项和默认值。
+        注意：此方法不包含定时配置相关的默认值。
+        
+        默认配置包含：
+        - is_admin_restricted: 0 (不限制管理员操作)
+        - rand: 20 (排行榜显示20人)
+        - if_send_pic: 1 (启用图片模式)
         
         Returns:
             None: 无返回值，配置文件创建结果通过日志输出
@@ -227,6 +245,7 @@ class DataManager:
     
     # ========== 群组数据管理 ==========
     
+    @safe_data_operation(default_return=[])
     async def get_group_data(self, group_id: str) -> List[UserData]:
         """获取群组数据
         
@@ -257,6 +276,7 @@ class DataManager:
         self.data_cache[cache_key] = users
         return users
     
+    @safe_data_operation(default_return=None)
     async def save_group_data(self, group_id: str, users: List[UserData]):
         """保存群组数据
         
@@ -284,10 +304,13 @@ class DataManager:
             if cache_key in self.data_cache:
                 del self.data_cache[cache_key]
             
-            self.logger.info(f"群组 {group_id} 数据已安全保存，共 {len(users)} 个用户")
+            # 只在开启详细日志时记录群组数据保存信息
+            if self.plugin_config and getattr(self.plugin_config, 'detailed_logging_enabled', True):
+                self.logger.info(f"群组 {group_id} 数据已安全保存，共 {len(users)} 个用户")
         else:
             self.logger.error(f"群组 {group_id} 数据保存失败")
     
+    @safe_data_operation(default_return=False)
     async def update_user_message(self, group_id: str, user_id: str, nickname: str) -> bool:
         """更新用户消息统计
         
@@ -315,61 +338,48 @@ class DataManager:
         group_lock = self._group_locks[group_id]
         
         async with group_lock:
-            try:
-                # 获取现有数据
-                users = await self.get_group_data(group_id)
-                current_timestamp = int(datetime.now().timestamp())
+            # 获取现有数据
+            users = await self.get_group_data(group_id)
+            current_timestamp = int(datetime.now().timestamp())
+            
+            # 优化性能：将用户列表转换为字典，以 user_id 为键
+            users_dict = {user.user_id: user for user in users}
+            
+            # 查找用户（O(1) 操作）
+            if user_id in users_dict:
+                # 更新现有用户 - 使用add_message方法正确记录历史
+                user = users_dict[user_id]
+                today = datetime.now().date()
+                message_date = MessageDate.from_date(today)
+                user.add_message(message_date)
+                user.last_message_time = current_timestamp
+                if user.first_message_time is None:
+                    user.first_message_time = current_timestamp
+            else:
+                # 如果用户不存在，创建新用户
+                # 为新用户创建消息记录
+                today = datetime.now().date()
+                message_date = MessageDate.from_date(today)
                 
-                # 优化性能：将用户列表转换为字典，以 user_id 为键
-                users_dict = {user.user_id: user for user in users}
-                
-                # 查找用户（O(1) 操作）
-                if user_id in users_dict:
-                    # 更新现有用户 - 使用add_message方法正确记录历史
-                    user = users_dict[user_id]
-                    today = datetime.now().date()
-                    message_date = MessageDate.from_date(today)
-                    user.add_message(message_date)
-                    user.last_message_time = current_timestamp
-                    if user.first_message_time is None:
-                        user.first_message_time = current_timestamp
-                else:
-                    # 如果用户不存在，创建新用户
-                    # 为新用户创建消息记录
-                    today = datetime.now().date()
-                    message_date = MessageDate.from_date(today)
-                    
-                    new_user = UserData(
-                        user_id=user_id,
-                        nickname=nickname,
-                        message_count=0,  # 先设为0，add_message会增加到1
-                        first_message_time=current_timestamp,
-                        last_message_time=current_timestamp
-                    )
-                    # 添加第一条消息记录（这会将message_count增加到1）
-                    new_user.add_message(message_date)
-                    users_dict[user_id] = new_user
-                
-                # 将字典转换回列表
-                updated_users = list(users_dict.values())
-                
-                # 保存更新后的数据
-                await self.save_group_data(group_id, updated_users)
-                return True
-                
-            except (IOError, OSError) as e:
-                self.logger.error(f"更新用户 {user_id} 消息统计时文件操作失败: {e}")
-                return False
-            except (KeyError, TypeError, ValueError) as e:
-                self.logger.error(f"用户 {user_id} 数据格式错误: {e}")
-                return False
-            except asyncio.TimeoutError as e:
-                self.logger.error(f"更新用户 {user_id} 消息统计超时: {e}")
-                return False
-            except Exception as e:
-                self.logger.error(f"更新用户 {user_id} 消息统计时发生未知错误: {e}")
-                return False
+                new_user = UserData(
+                    user_id=user_id,
+                    nickname=nickname,
+                    message_count=0,  # 先设为0，add_message会增加到1
+                    first_message_time=current_timestamp,
+                    last_message_time=current_timestamp
+                )
+                # 添加第一条消息记录（这会将message_count增加到1）
+                new_user.add_message(message_date)
+                users_dict[user_id] = new_user
+            
+            # 将字典转换回列表
+            updated_users = list(users_dict.values())
+            
+            # 保存更新后的数据
+            await self.save_group_data(group_id, updated_users)
+            return True
     
+    @safe_data_operation(default_return=False)
     async def clear_group_data(self, group_id: str) -> bool:
         """清空群组数据
         
@@ -381,27 +391,20 @@ class DataManager:
         Returns:
             bool: 操作是否成功
         """
-        try:
-            file_path = self.groups_dir / f"{group_id}.json"
-            
-            if await aiofiles.os.path.exists(file_path):
-                await aiofiles.os.remove(file_path)
-            
-            # 清除缓存
-            cache_key = f"group_data_{group_id}"
-            if cache_key in self.data_cache:
-                del self.data_cache[cache_key]
-            
-            self.logger.info(f"群组 {group_id} 数据已清空")
-            return True
-            
-        except (IOError, OSError) as e:
-            self.logger.error(f"清空群组 {group_id} 文件操作失败: {e}")
-            return False
-        except Exception as e:
-            self.logger.error(f"清空群组 {group_id} 数据时发生未知错误: {e}")
-            return False
+        file_path = self.groups_dir / f"{group_id}.json"
+        
+        if await aiofiles.os.path.exists(file_path):
+            await aiofiles.os.remove(file_path)
+        
+        # 清除缓存
+        cache_key = f"group_data_{group_id}"
+        if cache_key in self.data_cache:
+            del self.data_cache[cache_key]
+        
+        self.logger.info(f"群组 {group_id} 数据已清空")
+        return True
     
+    @safe_data_operation(default_return=None)
     async def get_user_in_group(self, group_id: str, user_id: str) -> Optional[UserData]:
         """获取群组中的用户信息
         
@@ -414,22 +417,13 @@ class DataManager:
         Returns:
             Optional[UserData]: 用户信息，如果用户不存在则返回None
         """
-        try:
-            users = await self.get_group_data(group_id)
-            for user in users:
-                if user.user_id == user_id:
-                    return user
-            return None
-        except (IOError, OSError) as e:
-            self.logger.error(f"获取用户 {user_id} 在群组 {group_id} 中的信息时文件操作失败: {e}")
-            return None
-        except (KeyError, TypeError, ValueError) as e:
-            self.logger.error(f"用户 {user_id} 数据格式错误: {e}")
-            return None
-        except Exception as e:
-            self.logger.error(f"获取用户 {user_id} 在群组 {group_id} 中的信息时发生未知错误: {e}")
-            return None
+        users = await self.get_group_data(group_id)
+        for user in users:
+            if user.user_id == user_id:
+                return user
+        return None
     
+    @safe_data_operation(default_return=[])
     async def get_all_groups(self) -> List[str]:
         """获取所有群组ID列表
         
@@ -438,26 +432,24 @@ class DataManager:
         Returns:
             List[str]: 群组ID列表
         """
-        try:
-            group_files = list(self.groups_dir.glob("*.json"))
-            group_ids = [file.stem for file in group_files if file.is_file()]
-            return group_ids
-        except (IOError, OSError) as e:
-            self.logger.error(f"获取群组列表时文件操作失败: {e}")
-            return []
-        except Exception as e:
-            self.logger.error(f"获取群组列表时发生未知错误: {e}")
-            return []
+        group_files = list(self.groups_dir.glob("*.json"))
+        group_ids = [file.stem for file in group_files if file.is_file()]
+        return group_ids
     
     # ========== 配置管理 ==========
     
+    @safe_config_operation(default_return=PluginConfig())
     async def get_config(self) -> PluginConfig:
-        """获取插件配置
+        """获取插件基本配置
         
-        从配置文件读取插件配置，支持缓存机制。
+        从配置文件读取插件基本配置（显示设置和权限控制），支持缓存机制。
+        注意：此方法不处理定时配置相关功能。
         
         Returns:
-            PluginConfig: 插件配置对象
+            PluginConfig: 插件配置对象，包含基本配置字段：
+                - is_admin_restricted: 管理员限制设置
+                - rand: 排行榜显示人数
+                - if_send_pic: 图片模式设置
             
         Raises:
             IOError: 当配置文件读取失败时抛出
@@ -469,35 +461,31 @@ class DataManager:
         if cache_key in self.config_cache:
             return self.config_cache[cache_key]
         
-        try:
-            if await asyncio.to_thread(self.config_file.exists):
-                async with aiofiles.open(self.config_file, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    config_data = await asyncio.to_thread(json.loads, content)
-                
-                config = PluginConfig.from_dict(config_data)
-                
-                # 缓存配置
-                self.config_cache[cache_key] = config
-                return config
-            else:
-                # 如果配置文件不存在，创建默认配置
-                default_config = PluginConfig()
-                await self.save_config(default_config)
-                return default_config
-                
-        except (IOError, OSError, json.JSONDecodeError) as e:
-            self.logger.error(f"读取配置文件失败: {e}")
-            # 返回默认配置
-            return PluginConfig()
+        if await asyncio.to_thread(self.config_file.exists):
+            async with aiofiles.open(self.config_file, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                config_data = await asyncio.to_thread(json.loads, content)
+            
+            config = PluginConfig.from_dict(config_data)
+            
+            # 缓存配置
+            self.config_cache[cache_key] = config
+            return config
+        else:
+            # 如果配置文件不存在，创建默认配置
+            default_config = PluginConfig()
+            await self.save_config(default_config)
+            return default_config
     
+    @safe_config_operation(default_return=None)
     async def save_config(self, config: PluginConfig):
-        """保存插件配置
+        """保存插件基本配置
         
-        将插件配置保存到配置文件，并清除配置缓存。
+        将插件基本配置保存到配置文件，并清除配置缓存。
+        注意：此方法不处理定时配置相关功能。
         
         Args:
-            config (PluginConfig): 要保存的配置对象
+            config (PluginConfig): 要保存的配置对象，包含基本配置字段
             
         Raises:
             IOError: 当配置文件写入失败时抛出
@@ -516,12 +504,16 @@ class DataManager:
             raise IOError("保存配置文件失败")
     
     async def update_config(self, updates: Dict[str, Any]) -> bool:
-        """更新配置
+        """更新插件基本配置
         
-        更新插件配置的指定字段。
+        更新插件基本配置的指定字段（is_admin_restricted, rand, if_send_pic）。
+        注意：此方法不处理定时配置相关字段的更新。
         
         Args:
-            updates (Dict[str, Any]): 配置更新字典
+            updates (Dict[str, Any]): 配置更新字典，只支持基本配置字段：
+                - is_admin_restricted: 管理员限制设置
+                - rand: 排行榜显示人数  
+                - if_send_pic: 图片模式设置
             
         Returns:
             bool: 更新是否成功
@@ -546,12 +538,14 @@ class DataManager:
         except (KeyError, TypeError, ValueError) as e:
             self.logger.error(f"配置数据格式错误: {e}")
             return False
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"更新配置时发生未知错误: {e}")
             return False
     
     # ========== 缓存管理 ==========
     
+    @safe_cache_operation(default_return=None)
     async def get_cached_image(self, cache_key: str) -> Optional[str]:
         """获取缓存图片
         
@@ -571,10 +565,12 @@ class DataManager:
         except (KeyError, TypeError) as e:
             self.logger.error(f"缓存键格式错误: {e}")
             return None
-        except Exception as e:
+        except (RuntimeError, MemoryError) as e:
+            # 捕获运行时错误和内存错误
             self.logger.error(f"获取缓存图片时发生未知错误: {e}")
             return None
     
+    @safe_cache_operation(default_return=False)
     async def cache_image(self, cache_key: str, image_path: str) -> bool:
         """缓存图片
         
@@ -594,7 +590,8 @@ class DataManager:
         except (KeyError, TypeError) as e:
             self.logger.error(f"缓存键格式错误: {e}")
             return False
-        except Exception as e:
+        except (RuntimeError, MemoryError) as e:
+            # 捕获运行时错误和内存错误
             self.logger.error(f"缓存图片时发生未知错误: {e}")
             return False
     
@@ -624,7 +621,8 @@ class DataManager:
                 
         except (KeyError, TypeError) as e:
             self.logger.error(f"缓存操作参数错误: {e}")
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"清空缓存时发生未知错误: {e}")
     
     def _generate_cache_key(self, prefix: str, *args) -> str:
@@ -660,14 +658,20 @@ class DataManager:
         except (KeyError, TypeError, AttributeError) as e:
             self.logger.error(f"缓存统计信息获取错误: {e}")
             return {}
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"获取缓存统计时发生未知错误: {e}")
             return {}
     
-    # 移除重复的get_cache_statistics方法，统一使用get_cache_stats
-    
     # ========== 统计功能 ==========
     
+    @safe_calculation(default_return={
+                "total_users": 0,
+                "total_messages": 0,
+                "active_users": 0,
+                "average_messages": 0,
+                "top_user": None
+            })
     async def get_group_statistics(self, group_id: str) -> Dict[str, Any]:
         """获取群组统计信息
         
@@ -724,7 +728,8 @@ class DataManager:
                 "average_messages": 0,
                 "top_user": None
             }
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"获取群组 {group_id} 统计信息时发生未知错误: {e}")
             return {
                 "total_users": 0,
@@ -734,6 +739,7 @@ class DataManager:
                 "top_user": None
             }
     
+    @safe_calculation(default_return=[])
     async def get_top_users(self, group_id: str, limit: int = 10) -> List[UserData]:
         """获取排行榜用户
         
@@ -758,7 +764,8 @@ class DataManager:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             self.logger.error(f"群组 {group_id} 用户数据格式错误: {e}")
             return []
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"获取群组 {group_id} 排行榜时发生未知错误: {e}")
             return []
     
@@ -824,7 +831,8 @@ class DataManager:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             self.logger.error(f"群组 {group_id} 用户数据格式错误: {e}")
             return []
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"获取群组 {group_id} 时间段用户时发生未知错误: {e}")
             return []
     
@@ -855,7 +863,8 @@ class DataManager:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             self.logger.error(f"群组 {group_id} 数据格式错误: {e}")
             return None
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"导出群组 {group_id} 数据时发生未知错误: {e}")
             return None
     
@@ -903,7 +912,8 @@ class DataManager:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             self.logger.error(f"导入数据格式错误: {e}")
             return False
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"导入群组 {group_id} 数据时发生未知错误: {e}")
             return False
     
@@ -949,7 +959,8 @@ class DataManager:
             self.logger.error(f"数据清理时文件操作失败: {e}")
         except (ValueError, TypeError) as e:
             self.logger.error(f"数据清理参数错误: {e}")
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"数据清理时发生未知错误: {e}")
     
     async def backup_group_data(self, group_id: str) -> Optional[Path]:
@@ -994,7 +1005,8 @@ class DataManager:
         except (ValueError, TypeError) as e:
             self.logger.error(f"备份参数错误: {e}")
             return None
-        except Exception as e:
+        except (RuntimeError, SystemError) as e:
+            # 捕获运行时错误和系统错误
             self.logger.error(f"备份群组 {group_id} 数据时发生未知错误: {e}")
             return None
     
