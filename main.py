@@ -484,7 +484,12 @@ class MessageStatsPlugin(Star):
             # 将在数据管理器中更新该用户的发言统计
         """
         try:
-            # 步骤1: 验证输入数据
+            # 步骤1: 安全处理昵称，确保不为空
+            if not nickname or not nickname.strip():
+                nickname = f"用户{user_id}"
+                self.logger.warning(f"昵称获取失败，使用默认昵称: {nickname}")
+            
+            # 步骤2: 验证输入数据
             validated_data = await self._validate_message_data(group_id, user_id, nickname)
             group_id, user_id, nickname = validated_data
             
@@ -1037,7 +1042,11 @@ class MessageStatsPlugin(Star):
         """
         try:
             nickname = event.get_sender_name()
-            return nickname or f"用户{user_id}"
+            # 确保昵称不为空或空字符串
+            if not nickname or not nickname.strip():
+                nickname = f"用户{user_id}"
+                self.logger.warning(f"事件中获取的昵称为空，使用默认昵称: {nickname}")
+            return nickname
         except (AttributeError, KeyError, TypeError) as e:
             self.logger.error(f"获取备用昵称失败: {e}")
             return f"用户{user_id}"
