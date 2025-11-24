@@ -1,11 +1,4 @@
 {
-  "auto_record_enabled": {
-    "type": "bool",
-    "description": "是否开启自动记录群成员发言统计",
-    "hint": "开启后将自动监听群聊消息并记录统计，无需手动使用#更新发言统计命令",
-    "default": true,
-    "obvious_hint": true
-  },
   "detailed_logging_enabled": {
     "type": "bool",
     "description": "是否开启详细日志记录",

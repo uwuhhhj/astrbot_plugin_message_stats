@@ -297,7 +297,7 @@ class MessageStatsPlugin(Star):
             self.logger.warning(f"图片生成器初始化失败: {e}")
         
         # 记录当前配置状态
-        self.logger.info(f"当前配置: 图片模式={self.plugin_config.if_send_pic}, 显示人数={self.plugin_config.rand}, 自动记录={self.plugin_config.auto_record_enabled}")
+        self.logger.info(f"当前配置: 图片模式={self.plugin_config.if_send_pic}, 显示人数={self.plugin_config.rand}")
     
     async def _initialize_timer_manager(self):
         """初始化定时任务管理器
@@ -431,10 +431,6 @@ class MessageStatsPlugin(Star):
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_message_listener(self, event: AstrMessageEvent):
         """自动消息监听器 - 监听所有消息并记录群成员发言统计"""
-        # 检查是否启用了自动记录功能
-        if not self.plugin_config or not getattr(self.plugin_config, 'auto_record_enabled', True):
-            return
-            
         # 跳过命令消息
         message_str = getattr(event, 'message_str', '')
         if message_str.startswith(('%', '/')):
@@ -610,55 +606,7 @@ class MessageStatsPlugin(Star):
     
     # ========== 排行榜命令 ==========
     
-    @filter.command("更新发言统计")
-    async def update_message_stats(self, event: AstrMessageEvent):
-        """手动更新发言统计"""
-        try:
-            # 使用AstrBot官方API获取群组ID和用户ID
-            group_id = event.get_group_id()
-            user_id = event.get_sender_id()
-            
-            if not group_id:
-                yield event.plain_result("无法获取群组信息,请在群聊中使用此命令！")
-                return
-                
-            if not user_id:
-                yield event.plain_result("无法获取用户信息！")
-                return
-            
-            group_id = str(group_id)
-            user_id = str(user_id)
-            
-            # 获取用户显示名称(优先使用群昵称)
-            user_name = await self._get_user_display_name(event, group_id, user_id)
-            
-            # 记录当前用户的发言
-            await self.data_manager.update_user_message(group_id, user_id, user_name)
-            
-            yield event.plain_result(f"已记录 {user_name} 的发言统计！")
-            
-        except AttributeError as e:
-            self.logger.error(f"更新发言统计失败(属性错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
-        except KeyError as e:
-            self.logger.error(f"更新发言统计失败(数据格式错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
-        except TypeError as e:
-            self.logger.error(f"更新发言统计失败(类型错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
-        except (IOError, OSError, FileNotFoundError) as e:
-            self.logger.error(f"更新发言统计失败(文件操作错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
-        except ValueError as e:
-            self.logger.error(f"更新发言统计失败(参数错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
-        except RuntimeError as e:
-            self.logger.error(f"更新发言统计失败(运行时错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
-        except (ConnectionError, asyncio.TimeoutError, ImportError, PermissionError) as e:
-            # 修复：替换过于宽泛的Exception为具体异常类型
-            self.logger.error(f"更新发言统计失败(网络或系统错误): {e}", exc_info=True)
-            yield event.plain_result("更新发言统计失败,请稍后重试")
+
     
     @filter.command("发言榜", alias={'水群榜', 'B话榜', '发言排行', '发言统计'})
     async def show_full_rank(self, event: AstrMessageEvent):

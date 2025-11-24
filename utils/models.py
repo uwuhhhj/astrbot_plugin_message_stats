@@ -367,7 +367,6 @@ class PluginConfig:
         is_admin_restricted (int): 是否限制管理员操作，0为不限制，1为限制
         rand (int): 排行榜显示人数，默认为20人
         if_send_pic (int): 是否发送图片，0为文字模式，1为图片模式（与Web Schema一致）
-        auto_record_enabled (bool): 是否开启自动记录群成员发言统计
         detailed_logging_enabled (bool): 是否开启详细日志记录，关闭后隐藏"记录消息统计"等详细日志
         timer_enabled (bool): 是否启用定时推送功能
         timer_push_time (str): 定时推送时间（支持HH:MM或cron格式，如"09:00"或"0 9 * * *"）
@@ -387,7 +386,6 @@ class PluginConfig:
         self.is_admin_restricted = 0
         self.rand = 20
         self.if_send_pic = 1
-        self.auto_record_enabled = True
         self.detailed_logging_enabled = True  # 默认开启详细日志，便于调试
         
         # 定时功能配置
@@ -410,7 +408,6 @@ class PluginConfig:
                 - is_admin_restricted: 管理员限制设置
                 - rand: 排行榜显示人数
                 - if_send_pic: 图片模式设置（与Schema一致）
-                - auto_record_enabled: 自动记录开关
                 - timer_enabled: 定时功能开关
                 - timer_push_time: 定时推送时间
                 - timer_target_groups: 定时推送群组
@@ -426,7 +423,6 @@ class PluginConfig:
             "is_admin_restricted": self.is_admin_restricted,
             "rand": self.rand,
             "if_send_pic": self.if_send_pic,
-            "auto_record_enabled": self.auto_record_enabled,
             "detailed_logging_enabled": self.detailed_logging_enabled,
             "timer_enabled": self.timer_enabled,
             "timer_push_time": self.timer_push_time,
@@ -448,7 +444,6 @@ class PluginConfig:
                 - rand: 排行榜显示人数
                 - if_send_pic: 图片模式设置（标准字段）
                 - send_pic: 图片模式设置（旧版本字段，兼容）
-                - auto_record_enabled: 自动记录开关
                 - timer_enabled: 定时功能开关
                 - timer_push_time: 定时推送时间
                 - timer_target_groups: 定时推送群组
@@ -473,7 +468,6 @@ class PluginConfig:
         config.is_admin_restricted = data.get("is_admin_restricted", 0)
         config.rand = data.get("rand", 20)
         config.if_send_pic = if_send_pic
-        config.auto_record_enabled = data.get("auto_record_enabled", True)
         config.detailed_logging_enabled = data.get("detailed_logging_enabled", True)
         config.timer_enabled = data.get("timer_enabled", False)
         config.timer_push_time = data.get("timer_push_time", "09:00")
