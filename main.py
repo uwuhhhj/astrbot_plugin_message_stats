@@ -51,14 +51,14 @@ from .utils.exception_handlers import (
 
 # 缓存配置
 CACHE_TTL_SECONDS = 300
-USER_NICKNAME_CACHE_TTL = 600
+USER_NICKNAME_CACHE_TTL = 300  # 5分钟缓存，平衡准确性和性能
 MAX_RANK_COUNT = 100
 
 # 配置键名
 RANK_COUNT_KEY = 'rand'
 IMAGE_MODE_KEY = 'if_send_pic'
 
-@register("astrbot_plugin_message_stats", "xiaoruange39", "群发言统计插件", "1.6.1")
+@register("astrbot_plugin_message_stats", "xiaoruange39", "群发言统计插件", "1.7.0")
 class MessageStatsPlugin(Star):
     """群发言统计插件
     
@@ -73,6 +73,13 @@ class MessageStatsPlugin(Star):
         - 权限控制和安全管理
         - 群成员昵称智能获取
         - 高效的缓存机制
+        - 支持指令别名，方便用户使用
+        
+    排行榜指令别名:
+        - 总榜: 发言榜 → 水群榜、B话榜、发言排行、排行榜、发言统计
+        - 日榜: 今日发言榜 → 今日排行、日榜、今日发言排行、今日排行榜
+        - 周榜: 本周发言榜 → 本周排行、周榜、本周发言排行、本周排行榜
+        - 月榜: 本月发言榜 → 本月排行、月榜、本月发言排行、本月排行榜
         
     Attributes:
         data_manager (DataManager): 数据管理器,负责数据的存储和读取
@@ -555,6 +562,7 @@ class MessageStatsPlugin(Star):
         """处理消息统计和记录
         
         执行实际的消息统计更新操作，并记录结果日志。
+        智能缓存管理：检查昵称变化，只在必要时更新缓存。
         
         Args:
             group_id (str): 验证后的群组ID
@@ -581,9 +589,22 @@ class MessageStatsPlugin(Star):
         success = await self.data_manager.update_user_message(group_id, user_id, nickname)
         
         if success:
-            # 只在开启详细日志时记录消息统计
-            if self.plugin_config.detailed_logging_enabled:
-                self.logger.info(f"记录消息统计: {nickname}")
+            # 智能缓存管理：检查昵称变化
+            nickname_cache_key = f"nickname_{user_id}"
+            cached_nickname = self.user_nickname_cache.get(nickname_cache_key)
+            
+            # 只在昵称变化时才更新缓存（节省API调用）
+            if cached_nickname != nickname:
+                self.user_nickname_cache[nickname_cache_key] = nickname
+                
+                if self.plugin_config.detailed_logging_enabled:
+                    self.logger.debug(f"昵称发生变化，更新缓存: {cached_nickname} -> {nickname}")
+                    self.logger.info(f"记录消息统计: {nickname}")
+            else:
+                # 昵称未变化，只记录基本日志
+                if self.plugin_config.detailed_logging_enabled:
+                    self.logger.debug(f"昵称未变化，保持缓存: {nickname}")
+                    self.logger.info(f"记录消息统计: {nickname}")
         else:
             self.logger.error(f"记录消息统计失败: {nickname}")
     
@@ -639,39 +660,27 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"更新发言统计失败(网络或系统错误): {e}", exc_info=True)
             yield event.plain_result("更新发言统计失败,请稍后重试")
     
-    @filter.command("发言榜")
+    @filter.command("发言榜", alias={'水群榜', 'B话榜', '发言排行', '发言统计'})
     async def show_full_rank(self, event: AstrMessageEvent):
-        """显示总排行榜"""
+        """显示总排行榜，别名：水群榜/B话榜/发言排行/发言统计"""
         async for result in self._show_rank(event, RankType.TOTAL):
             yield result
     
-    @filter.command("水群榜")
-    async def show_water_group_rank(self, event: AstrMessageEvent):
-        """显示水群排行榜(发言榜别名)"""
-        async for result in self._show_rank(event, RankType.TOTAL):
-            yield result
-    
-    @filter.command("B话榜")
-    async def show_bhua_rank(self, event: AstrMessageEvent):
-        """显示B话排行榜(发言榜别名)"""
-        async for result in self._show_rank(event, RankType.TOTAL):
-            yield result
-    
-    @filter.command("今日发言榜")
+    @filter.command("今日发言榜", alias={'今日水群榜', '今日发言排行', '今日B话榜'})
     async def show_daily_rank(self, event: AstrMessageEvent):
-        """显示今日排行榜"""
+        """显示今日排行榜，别名：今日水群榜/今日发言排行/今日B话榜"""
         async for result in self._show_rank(event, RankType.DAILY):
             yield result
     
-    @filter.command("本周发言榜")
+    @filter.command("本周发言榜", alias={'本周水群榜', '本周发言排行', '本周B话榜'})
     async def show_weekly_rank(self, event: AstrMessageEvent):
-        """显示本周排行榜"""
+        """显示本周排行榜，别名：本周水群榜/本周发言排行/本周B话榜"""
         async for result in self._show_rank(event, RankType.WEEKLY):
             yield result
     
-    @filter.command("本月发言榜")
+    @filter.command("本月发言榜", alias={'本月水群榜', '本月发言排行', '本月B话榜'})
     async def show_monthly_rank(self, event: AstrMessageEvent):
-        """显示本月排行榜"""
+        """显示本月排行榜，别名：本月水群榜/本月发言排行/本月B话榜"""
         async for result in self._show_rank(event, RankType.MONTHLY):
             yield result
     
@@ -840,9 +849,55 @@ class MessageStatsPlugin(Star):
             if cache_key in self.group_members_cache:
                 del self.group_members_cache[cache_key]
                 self.logger.info(f"刷新群 {group_id} 成员缓存")
-                yield event.plain_result("群成员缓存已刷新！")
             else:
-                yield event.plain_result("该群没有缓存的成员信息！")
+                self.logger.info(f"群 {group_id} 没有需要刷新的成员缓存")
+            
+            # 清除群成员字典缓存（重要！用于昵称获取）
+            dict_cache_key = f"group_members_dict_{group_id}"
+            if dict_cache_key in self.group_members_dict_cache:
+                del self.group_members_dict_cache[dict_cache_key]
+                self.logger.info(f"刷新群 {group_id} 字典缓存")
+            
+            # 同时清除昵称缓存（快速修复昵称更新问题）
+            self.clear_user_cache()  # 清除所有用户昵称缓存
+            self.logger.info(f"刷新群 {group_id} 昵称缓存")
+            
+            # 为现有用户更新最新昵称
+            try:
+                group_data = await self.data_manager.get_group_data(group_id)
+                if group_data:
+                    # 获取群成员最新信息
+                    members_info = await self._fetch_group_members_from_api(event, group_id)
+                    if members_info:
+                        # 构建用户ID到最新昵称的映射
+                        member_nickname_map = {}
+                        for member in members_info:
+                            user_id = str(member.get("user_id", ""))
+                            if user_id:
+                                # 使用群的昵称获取逻辑
+                                display_name = self._get_display_name_from_member(member)
+                                if display_name:
+                                    member_nickname_map[user_id] = display_name
+                        
+                        # 更新用户数据中的昵称
+                        updated_count = 0
+                        for user in group_data:
+                            if user.user_id in member_nickname_map:
+                                old_nickname = user.nickname
+                                new_nickname = member_nickname_map[user.user_id]
+                                if old_nickname != new_nickname:
+                                    user.nickname = new_nickname
+                                    updated_count += 1
+                                    self.logger.info(f"更新用户 {user.user_id} 昵称: {old_nickname} -> {new_nickname}")
+                        
+                        # 保存更新后的数据
+                        if updated_count > 0:
+                            await self.data_manager.save_group_data(group_id, group_data)
+                            self.logger.info(f"群 {group_id} 共有 {updated_count} 个用户的昵称已更新")
+            except Exception as e:
+                self.logger.error(f"更新用户昵称失败: {e}", exc_info=True)
+            
+            yield event.plain_result("群成员缓存、字典缓存和昵称缓存已全部刷新！")
             
         except AttributeError as e:
             self.logger.error(f"刷新群成员缓存失败(属性错误): {e}", exc_info=True)
@@ -940,12 +995,12 @@ class MessageStatsPlugin(Star):
         return member.get("card") or member.get("nickname")
 
     async def _get_user_nickname_unified(self, event: AstrMessageEvent, group_id: str, user_id: str) -> str:
-        """统一的用户昵称获取方法 - 重构版本
+        """统一的用户昵称获取方法 - 性能优先版本（缓存优先策略）
         
-        使用扁平化的逻辑，拆分为独立的辅助方法：
-        1. 从昵称缓存获取
-        2. 从群成员字典缓存获取
-        3. 从API获取并缓存
+        策略：采用分层缓存策略，性能最优
+        1. 从昵称缓存获取（最高效且常用）
+        2. 从群成员字典缓存获取（中等效率）
+        3. 从API获取（仅在前两级缓存失效时，确保准确性）
         4. 返回默认昵称
         
         Args:
@@ -956,17 +1011,17 @@ class MessageStatsPlugin(Star):
         Returns:
             str: 用户的显示昵称，如果都失败则返回 "用户{user_id}"
         """
-        # 步骤1: 从昵称缓存获取
+        # 步骤1: 从昵称缓存获取（最高效优先）
         nickname = await self._get_from_nickname_cache(user_id)
         if nickname:
             return nickname
         
-        # 步骤2: 从群成员字典缓存获取
+        # 步骤2: 从群成员字典缓存获取（中等效率）
         nickname = await self._get_from_dict_cache(group_id, user_id)
         if nickname:
             return nickname
         
-        # 步骤3: 从API获取并缓存
+        # 步骤3: 从API获取（仅在前两级缓存失效时调用，确保准确性）
         nickname = await self._fetch_and_cache_from_api(event, group_id, user_id)
         if nickname:
             return nickname
@@ -978,14 +1033,22 @@ class MessageStatsPlugin(Star):
     async def _get_from_nickname_cache(self, user_id: str) -> Optional[str]:
         """从昵称缓存获取昵称"""
         nickname_cache_key = f"nickname_{user_id}"
-        return self.user_nickname_cache.get(nickname_cache_key)
+        cached_nickname = self.user_nickname_cache.get(nickname_cache_key)
+        
+        # 如果缓存存在但TTL即将过期，标记为需要刷新（由上层逻辑处理）
+        if cached_nickname:
+            # TTL即将过期的用户可以在下次使用时自动刷新
+            return cached_nickname
+        
+        # 缓存miss，返回None触发上层逻辑从其他源获取
+        return cached_nickname
     
     @exception_handler(ExceptionConfig(log_exception=True, reraise=True))
     async def _get_from_dict_cache(self, group_id: str, user_id: str) -> Optional[str]:
         """从群成员字典缓存获取昵称"""
         dict_cache_key = f"group_members_dict_{group_id}"
-        if dict_cache_key in self.group_members_cache:
-            members_dict = self.group_members_cache[dict_cache_key]
+        if dict_cache_key in self.group_members_dict_cache:
+            members_dict = self.group_members_dict_cache[dict_cache_key]
             if user_id in members_dict:
                 member = members_dict[user_id]
                 display_name = self._get_display_name_from_member(member)
@@ -1222,6 +1285,9 @@ class MessageStatsPlugin(Star):
         if not group_data:
             return None
         
+        # 显示排行榜前强制刷新昵称缓存，确保昵称准确性
+        await self._refresh_nickname_cache_for_ranking(event, group_id, group_data)
+        
         # 根据类型筛选数据并获取排序值
         filtered_data_with_values = await self._filter_data_by_rank_type(group_data, rank_type)
         
@@ -1246,6 +1312,48 @@ class MessageStatsPlugin(Star):
         
         return group_id, current_user_id, filtered_data, config, title, group_info
     
+    async def _refresh_nickname_cache_for_ranking(self, event: AstrMessageEvent, group_id: str, group_data):
+        """排行榜显示前强制刷新昵称缓存，确保显示最新昵称"""
+        try:
+            # 获取最新群成员信息
+            members_info = await self._fetch_group_members_from_api(event, group_id)
+            if not members_info:
+                return
+            
+            # 重建群成员字典缓存
+            dict_cache_key = f"group_members_dict_{group_id}"
+            members_dict = {str(m.get("user_id", "")): m for m in members_info if m.get("user_id")}
+            self.group_members_dict_cache[dict_cache_key] = members_dict
+            
+            # 更新用户数据中的昵称
+            updated_count = 0
+            for user in group_data:
+                user_id = user.user_id
+                if user_id in members_dict:
+                    member = members_dict[user_id]
+                    display_name = self._get_display_name_from_member(member)
+                    if display_name and user.nickname != display_name:
+                        # 更新昵称并同步到昵称缓存
+                        old_nickname = user.nickname
+                        user.nickname = display_name
+                        updated_count += 1
+                        
+                        # 同时更新昵称缓存
+                        nickname_cache_key = f"nickname_{user_id}"
+                        self.user_nickname_cache[nickname_cache_key] = display_name
+                        
+                        if self.plugin_config.detailed_logging_enabled:
+                            self.logger.debug(f"排行榜刷新昵称缓存: {old_nickname} → {display_name}")
+            
+            # 保存更新后的数据
+            if updated_count > 0:
+                await self.data_manager.save_group_data(group_id, group_data)
+                if self.plugin_config.detailed_logging_enabled:
+                    self.logger.info(f"排行榜显示前更新了 {updated_count} 个用户的昵称缓存")
+            
+        except Exception as e:
+            self.logger.warning(f"排行榜前刷新昵称缓存失败: {e}")
+
     async def _render_rank_as_image(self, event: AstrMessageEvent, filtered_data: List[tuple], 
                                   group_info: GroupInfo, title: str, current_user_id: str, config: PluginConfig):
         """渲染排行榜为图片模式"""

@@ -347,8 +347,9 @@ class DataManager:
             
             # 查找用户（O(1) 操作）
             if user_id in users_dict:
-                # 更新现有用户 - 使用add_message方法正确记录历史
+                # 更新现有用户 - 使用add_message方法正确记录历史，同时更新昵称
                 user = users_dict[user_id]
+                user.nickname = nickname  # 重要：更新昵称以反映最新变化
                 today = datetime.now().date()
                 message_date = MessageDate.from_date(today)
                 user.add_message(message_date)

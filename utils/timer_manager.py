@@ -302,7 +302,7 @@ class TimerManager:
             self.logger.warning(f"⚠️ 以下群组缺少unified_msg_origin: {', '.join(missing_origins)}")
             self.logger.info("💡 解决方案: 在对应群组中发送任意消息以收集unified_msg_origin")
             self.logger.info("📝 定时任务仍会启动，但推送时会失败直到unified_msg_origin被收集")
-            self.logger.info("📋 提示: 可以使用 #手动推送 命令测试推送功能")
+            self.logger.info("📋 提示: 可以使用 #手动推送发言榜 命令测试推送功能")
         
         # 如果任务已在运行，先停止
         if self.timer_task and not self.timer_task.done():
@@ -550,6 +550,9 @@ class TimerManager:
         if not group_data:
             self.logger.warning(f"群组 {group_id} 没有数据")
             return False
+        
+        # 定时推送前强制刷新昵称缓存，确保显示最新昵称
+        await self._refresh_nickname_cache_for_timer_push(group_id, group_data)
         
         # 根据排行榜类型筛选数据
         # 定时推送强制使用今日排行榜
@@ -847,6 +850,52 @@ class TimerManager:
             return f"本月[{now.year}年{now.month}月]发言榜单"
         else:
             return "发言榜单"
+    
+    async def _refresh_nickname_cache_for_timer_push(self, group_id: str, group_data):
+        """定时推送前强制刷新昵称缓存，确保显示最新昵称"""
+        try:
+            if not self.context:
+                self.logger.warning("定时推送时缺少context，无法刷新昵称缓存")
+                return
+            
+            # 创建临时事件对象来获取群成员信息
+            # 使用模拟的事件对象调用群成员获取API
+            params = {"group_id": group_id}
+            
+            # 获取最新群成员信息
+            if hasattr(self.context.bot, 'api'):
+                try:
+                    members_info = await self.context.bot.api.call_action('get_group_member_list', **params)
+                    if not members_info:
+                        return
+                    
+                    # 重建字典缓存
+                    dict_cache_key = f"group_members_dict_{group_id}"
+                    members_dict = {str(m.get("user_id", "")): m for m in members_info if m.get("user_id")}
+                    
+                    # 更新用户数据中的昵称
+                    updated_count = 0
+                    for user in group_data:
+                        user_id = user.user_id
+                        if user_id in members_dict:
+                            member = members_dict[user_id]
+                            display_name = member.get("card") or member.get("nickname")
+                            if display_name and user.nickname != display_name:
+                                old_nickname = user.nickname
+                                user.nickname = display_name
+                                updated_count += 1
+                                self.logger.debug(f"定时推送刷新昵称: {old_nickname} → {display_name}")
+                    
+                    # 保存更新后的数据
+                    if updated_count > 0:
+                        await self.data_manager.save_group_data(group_id, group_data)
+                        self.logger.info(f"定时推送前更新了 {updated_count} 个用户的昵称")
+                        
+                except Exception as e:
+                    self.logger.warning(f"定时推送时获取群成员信息失败: {e}")
+            
+        except Exception as e:
+            self.logger.warning(f"定时推送前刷新昵称缓存失败: {e}")
     
     def _generate_text_message(self, users_with_values: List[tuple], group_info: GroupInfo, title: str, config) -> str:
         """生成文字消息
