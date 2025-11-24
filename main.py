@@ -58,7 +58,7 @@ MAX_RANK_COUNT = 100
 RANK_COUNT_KEY = 'rand'
 IMAGE_MODE_KEY = 'if_send_pic'
 
-@register("stats", "xiaoruange39", "群发言统计插件", "1.6.0")
+@register("astrbot_plugin_message_stats", "xiaoruange39", "群发言统计插件", "1.6.1")
 class MessageStatsPlugin(Star):
     """群发言统计插件
     
@@ -484,6 +484,12 @@ class MessageStatsPlugin(Star):
             # 将在数据管理器中更新该用户的发言统计
         """
         try:
+            # 步骤0: 检查是否为屏蔽用户
+            if self._is_blocked_user(user_id):
+                if self.plugin_config.detailed_logging_enabled:
+                    self.logger.debug(f"用户 {user_id} 在屏蔽列表中，跳过统计")
+                return
+            
             # 步骤1: 安全处理昵称，确保不为空
             if not nickname or not nickname.strip():
                 nickname = f"用户{user_id}"
@@ -493,7 +499,7 @@ class MessageStatsPlugin(Star):
             validated_data = await self._validate_message_data(group_id, user_id, nickname)
             group_id, user_id, nickname = validated_data
             
-            # 步骤2: 处理消息统计和记录
+            # 步骤3: 处理消息统计和记录
             await self._process_message_stats(group_id, user_id, nickname)
             
         except ValueError as e:
@@ -1065,6 +1071,28 @@ class MessageStatsPlugin(Star):
         
         self.logger.info(f"清理用户缓存: {user_id or '全部'}")
     
+    def _is_blocked_user(self, user_id: str) -> bool:
+        """检查用户是否在屏蔽列表中
+        
+        Args:
+            user_id (str): 用户ID
+            
+        Returns:
+            bool: 如果用户在屏蔽列表中返回True，否则返回False
+        """
+        if not hasattr(self, 'plugin_config') or not self.plugin_config:
+            return False
+        
+        blocked_users = getattr(self.plugin_config, 'blocked_users', [])
+        if not blocked_users:
+            return False
+        
+        # 将用户ID转换为字符串进行比较
+        user_id_str = str(user_id)
+        
+        # 检查是否在屏蔽列表中
+        return user_id_str in [str(uid) for uid in blocked_users]
+    
     async def _get_group_members_cache(self, event: AstrMessageEvent, group_id: str) -> Optional[List[Dict[str, Any]]]:
         """获取群成员缓存"""
         cache_key = f"group_members_{group_id}"
@@ -1315,8 +1343,9 @@ class MessageStatsPlugin(Star):
         start_date, end_date, period_name = self._get_time_period_for_rank_type(rank_type)
         
         if rank_type == RankType.TOTAL:
-            # 总榜：返回每个用户及其总发言数的元组，但过滤掉从未发言的用户
-            return [(user, user.message_count) for user in group_data if user.message_count > 0]
+            # 总榜：返回每个用户及其总发言数的元组，但过滤掉从未发言的用户和屏蔽用户
+            return [(user, user.message_count) for user in group_data 
+                   if user.message_count > 0 and not self._is_blocked_user(user.user_id)]
         
         # 时间段过滤：优化版本，使用预聚合策略减少双重循环
         # 策略：如果时间段较短（日榜），直接计算；如果时间段较长（周榜/月榜），使用缓存
@@ -1336,6 +1365,10 @@ class MessageStatsPlugin(Star):
         """计算日榜（直接计算策略）"""
         filtered_users = []
         for user in group_data:
+            # 过滤屏蔽用户
+            if self._is_blocked_user(user.user_id):
+                continue
+                
             if not user.history:
                 continue
             
@@ -1357,6 +1390,10 @@ class MessageStatsPlugin(Star):
         # 批量计算，减少函数调用开销
         filtered_users = []
         for user in active_users:
+            # 过滤屏蔽用户
+            if self._is_blocked_user(user.user_id):
+                continue
+                
             # 使用更高效的计算方法（现在是异步方法）
             period_count = await self._count_messages_in_period_fast(user.history, start_date, end_date)
             if period_count > 0:

@@ -395,6 +395,9 @@ class PluginConfig:
         self.timer_push_time = "09:00"
         self.timer_target_groups = []
         self.timer_rank_type = "daily"  # 默认推送今日排行榜
+        
+        # 屏蔽用户列表
+        self.blocked_users = []
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典
@@ -428,7 +431,8 @@ class PluginConfig:
             "timer_enabled": self.timer_enabled,
             "timer_push_time": self.timer_push_time,
             "timer_target_groups": self.timer_target_groups,
-            "timer_rank_type": self.timer_rank_type
+            "timer_rank_type": self.timer_rank_type,
+            "blocked_users": self.blocked_users
         }
     
     @classmethod
@@ -475,6 +479,7 @@ class PluginConfig:
         config.timer_push_time = data.get("timer_push_time", "09:00")
         config.timer_target_groups = data.get("timer_target_groups", [])
         config.timer_rank_type = data.get("timer_rank_type", "daily")
+        config.blocked_users = data.get("blocked_users", [])
         
         return config
 
