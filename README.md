@@ -102,7 +102,6 @@ astrbot_plugin_message_stats/
 ├── config.yaml           # 配置文件
 ├── example_config.json   # 配置示例
 ├── _conf_schema.json     # 配置架构
-├── test_timer_feature.py # 定时功能测试
 ├── data/                 # 数据目录
 │   └── config.json       # 用户配置
 ├── templates/            # 模板目录
