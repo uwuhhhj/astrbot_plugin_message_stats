@@ -148,15 +148,6 @@ astrbot_plugin_message_stats/
 
 欢迎提交Issue和Pull Request！
 
-### 开发环境
-```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 运行测试
-python -m pytest tests/
-```
-
 ## 📄 许可证
 
 本项目采用 MIT 许可证。
