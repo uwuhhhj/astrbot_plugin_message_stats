@@ -15,15 +15,16 @@ import hashlib
 import json
 import uuid
 
-
 from astrbot.api import logger as astrbot_logger
 
-# 常量定义
-IMAGE_WIDTH = 1200
-VIEWPORT_HEIGHT = 1
-BROWSER_TIMEOUT = 10000  # 毫秒
-DEFAULT_FONT_SIZE = 14
-ROW_HEIGHT = 30
+# 从集中管理的常量模块导入图片生成配置
+from .constants import (
+    IMAGE_WIDTH,
+    VIEWPORT_HEIGHT,
+    BROWSER_TIMEOUT,
+    DEFAULT_FONT_SIZE,
+    ROW_HEIGHT
+)
 
 # Jinja2模板引擎
 try:

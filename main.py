@@ -6,6 +6,7 @@ AstrBot 群发言统计插件
 # 标准库导入
 import asyncio
 import os
+import re
 import aiofiles
 from datetime import datetime, date, timedelta
 from typing import List, Optional, Dict, Any
@@ -48,15 +49,12 @@ from .utils.exception_handlers import (
 )
 
 # ========== 全局常量定义 ==========
-
-# 缓存配置
-CACHE_TTL_SECONDS = 300
-USER_NICKNAME_CACHE_TTL = 300  # 5分钟缓存，平衡准确性和性能
-MAX_RANK_COUNT = 100
-
-# 配置键名
-RANK_COUNT_KEY = 'rand'
-IMAGE_MODE_KEY = 'if_send_pic'
+# 从集中管理的常量模块导入
+from .utils.constants import (
+    MAX_RANK_COUNT,
+    USER_NICKNAME_CACHE_TTL,
+    GROUP_MEMBERS_CACHE_TTL as CACHE_TTL_SECONDS
+)
 
 @register("astrbot_plugin_message_stats", "xiaoruange39", "群发言统计插件", "1.7.0")
 class MessageStatsPlugin(Star):
@@ -178,8 +176,9 @@ class MessageStatsPlugin(Star):
                     
                     # 如果定时任务正在运行且需要此群组，重新启动定时任务
                     if self.timer_manager:
-                        # 记录当前unified_msg_origin状态
-                        self.logger.info(f"群组 {group_id} 的 unified_msg_origin: {unified_msg_origin[:20]}...")
+                        # 记录当前unified_msg_origin状态（安全截断）
+                        origin_preview = unified_msg_origin[:20] + "..." if len(unified_msg_origin) > 20 else unified_msg_origin
+                        self.logger.info(f"群组 {group_id} 的 unified_msg_origin: {origin_preview}")
                         
                         if self.plugin_config.timer_enabled and str(group_id) in self.plugin_config.timer_target_groups:
                             self.logger.info(f"检测到目标群组 {group_id} 的 unified_msg_origin 已更新，重新启动定时任务...")
@@ -207,9 +206,9 @@ class MessageStatsPlugin(Star):
     
     # ========== 类常量定义 ==========
     
-    # 排行榜数量限制常量
+    # 排行榜数量限制常量（使用模块级常量）
     RANK_COUNT_MIN = 1
-    MAX_RANK_COUNT = 100
+    # MAX_RANK_COUNT 已从 constants 模块导入，不再重复定义
     
     # 图片模式别名常量
     IMAGE_MODE_ENABLE_ALIASES = {'1', 'true', '开', 'on', 'yes'}
@@ -842,7 +841,7 @@ class MessageStatsPlugin(Star):
                         if updated_count > 0:
                             await self.data_manager.save_group_data(group_id, group_data)
                             self.logger.info(f"群 {group_id} 共有 {updated_count} 个用户的昵称已更新")
-            except Exception as e:
+            except (AttributeError, KeyError, TypeError, ValueError, RuntimeError, IOError, OSError) as e:
                 self.logger.error(f"更新用户昵称失败: {e}", exc_info=True)
             
             yield event.plain_result("群成员缓存、字典缓存和昵称缓存已全部刷新！")
@@ -1299,7 +1298,7 @@ class MessageStatsPlugin(Star):
                 if self.plugin_config.detailed_logging_enabled:
                     self.logger.info(f"排行榜显示前更新了 {updated_count} 个用户的昵称缓存")
             
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError, IOError, OSError, ConnectionError, asyncio.TimeoutError) as e:
             self.logger.warning(f"排行榜前刷新昵称缓存失败: {e}")
 
     async def _render_rank_as_image(self, event: AstrMessageEvent, filtered_data: List[tuple], 
@@ -2023,7 +2022,7 @@ class MessageStatsPlugin(Star):
     @exception_handler(ExceptionConfig(log_exception=True, reraise=True))
     def _validate_time_format(self, time_str: str) -> bool:
         """验证时间格式"""
-        import re
+        # 使用模块级别导入的 re 模块
         pattern = r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
         return bool(re.match(pattern, time_str))
     

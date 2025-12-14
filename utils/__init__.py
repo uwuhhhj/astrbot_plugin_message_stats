@@ -3,6 +3,7 @@
 包含插件所需的各种工具类和函数
 
 模块结构：
+- constants: 常量定义（集中管理）
 - models: 数据模型定义
 - file_utils: 文件操作工具
 - date_utils: 日期时间处理工具
@@ -24,7 +25,17 @@ from .data_manager import DataManager
 from .image_generator import ImageGenerator, ImageGenerationError
 from .validators import Validators, ValidationError
 
+# 导入常用常量供外部使用
+from .constants import (
+    MAX_RANK_COUNT,
+    DATA_CACHE_TTL,
+    CONFIG_CACHE_TTL
+)
+
 __all__ = [
+    # 常量
+    "MAX_RANK_COUNT", "DATA_CACHE_TTL", "CONFIG_CACHE_TTL",
+    
     # 数据模型
     "UserData", "MessageDate", "PluginConfig",
     "GroupInfo", "RankData", "RankType",

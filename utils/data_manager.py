@@ -21,12 +21,13 @@ from .models import UserData, PluginConfig, MessageDate
 from .data_stores import GroupDataStore, ConfigManager, PluginCache
 from .exception_handlers import safe_data_operation, safe_file_operation, safe_cache_operation, safe_config_operation, safe_calculation
 
-# 缓存配置常量
-# 这些常量控制DataManager中缓存的行为，修改这些值会影响整个插件的缓存性能
-DATA_CACHE_MAXSIZE = 1000  # 数据缓存最大容量，用于缓存群组数据
-DATA_CACHE_TTL = 300  # 数据缓存生存时间（秒），5分钟后过期
-CONFIG_CACHE_MAXSIZE = 10  # 配置缓存最大容量，用于缓存插件配置
-CONFIG_CACHE_TTL = 60  # 配置缓存生存时间（秒），1分钟后过期
+# 从集中管理的常量模块导入缓存配置
+from .constants import (
+    DATA_CACHE_MAXSIZE,
+    DATA_CACHE_TTL,
+    CONFIG_CACHE_MAXSIZE,
+    CONFIG_CACHE_TTL
+)
 
 
 class DataManager:

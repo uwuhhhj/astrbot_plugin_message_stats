@@ -18,35 +18,25 @@ except ImportError:
     bleach = None
 
 
-# 验证常量定义
-GROUP_ID_MIN_LENGTH = 5
-GROUP_ID_MAX_LENGTH = 12
-
-USER_ID_MIN_LENGTH = 1
-USER_ID_MAX_LENGTH = 20
-
-NICKNAME_MAX_LENGTH = 50
-
-IMAGE_MODE_TEXT = 0
-IMAGE_MODE_IMAGE = 1
-
-RANK_LIMIT_MIN = 5
-RANK_LIMIT_MAX = 50
-RANK_LIMIT_DEFAULT = 20
-
-MESSAGE_CONTENT_MAX_LENGTH = 200
-
-FILE_PATH_MAX_LENGTH = 500
-
-# 危险字符列表
-DANGEROUS_CHARS = ['<', '>', ':', '"', '|', '?', '*', '\x00', '\x0a', '\x0d']
-
-# 报告类型
-VALID_REPORT_TYPES = ['daily', 'weekly', 'monthly']
-
-# 图片模式字符串映射
-TEXT_MODE_STRINGS = ['0', 'false', '否', '关', '关闭', '文字', 'text']
-IMAGE_MODE_STRINGS = ['1', 'true', '是', '开', '开启', '图片', 'image', '图片模式']
+# 从集中管理的常量模块导入验证常量
+from .constants import (
+    GROUP_ID_MIN_LENGTH,
+    GROUP_ID_MAX_LENGTH,
+    USER_ID_MIN_LENGTH,
+    USER_ID_MAX_LENGTH,
+    NICKNAME_MAX_LENGTH,
+    IMAGE_MODE_TEXT,
+    IMAGE_MODE_IMAGE,
+    RANK_LIMIT_MIN,
+    RANK_LIMIT_MAX,
+    RANK_LIMIT_DEFAULT,
+    MESSAGE_CONTENT_MAX_LENGTH,
+    FILE_PATH_MAX_LENGTH,
+    DANGEROUS_CHARS,
+    VALID_REPORT_TYPES,
+    TEXT_MODE_STRINGS,
+    IMAGE_MODE_STRINGS
+)
 
 
 

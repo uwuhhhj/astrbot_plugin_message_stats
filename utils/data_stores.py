@@ -15,12 +15,13 @@ from cachetools import TTLCache
 
 from .models import UserData, PluginConfig, MessageDate
 
-
-# 缓存配置常量
-DATA_CACHE_MAXSIZE = 1000
-DATA_CACHE_TTL = 300  # 5分钟
-CONFIG_CACHE_MAXSIZE = 10
-CONFIG_CACHE_TTL = 60  # 1分钟
+# 从集中管理的常量模块导入缓存配置
+from .constants import (
+    DATA_CACHE_MAXSIZE,
+    DATA_CACHE_TTL,
+    CONFIG_CACHE_MAXSIZE,
+    CONFIG_CACHE_TTL
+)
 
 
 class GroupDataStore:
