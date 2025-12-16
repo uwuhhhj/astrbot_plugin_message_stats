@@ -166,6 +166,10 @@ class TimerManager:
         self.logger = astrbot_logger
         self._stop_event = asyncio.Event()
         
+        # 添加执行锁，防止重复推送
+        self._execution_lock = asyncio.Lock()
+        self._is_executing = False
+        
         # 记录初始化状态
         if context:
             self.logger.info("定时任务管理器初始化成功（完整功能）")
@@ -182,48 +186,61 @@ class TimerManager:
         Returns:
             bool: 启动是否成功
         """
-        # 检查推送服务是否初始化
-        if not self.push_service:
-            self.logger.error("推送服务未初始化，无法启动定时任务")
-            return False
-        
-        # 检查定时功能是否启用
-        if not config.timer_enabled:
-            self.logger.info("定时功能未启用，跳过启动")
-            return False
-        
-        # 验证配置
-        if not self._validate_timer_config(config):
-            self.logger.error("定时配置验证失败")
-            return False
-        
-        # 检查unified_msg_origin可用性
-        missing_origins = []
-        for group_id in config.timer_target_groups:
-            if str(group_id) not in self.push_service.group_unified_msg_origins:
-                missing_origins.append(str(group_id))
-        
-        if missing_origins:
-            self.logger.warning(f"⚠️ 以下群组缺少unified_msg_origin: {', '.join(missing_origins)}")
-            self.logger.info("💡 解决方案: 在对应群组中发送任意消息以收集unified_msg_origin")
-            self.logger.info("📝 定时任务仍会启动，但推送时会失败直到unified_msg_origin被收集")
-            self.logger.info("📋 提示: 可以使用 #手动推送发言榜 命令测试推送功能")
-        
-        # 如果任务已在运行，先停止
-        if self.timer_task and not self.timer_task.done():
-            await self.stop_timer()
-        
-        # 设置状态
-        self.status = TimerTaskStatus.RUNNING
-        
-        # 计算下次推送时间
-        self.next_push_time = self._calculate_next_push_time(config.timer_push_time)
-        
-        # 启动定时任务
-        self.timer_task = asyncio.create_task(self._timer_loop(config))
-        
-        self.logger.info(f"定时任务已启动，下次推送时间: {self.next_push_time}")
-        return True
+        # 使用执行锁防止并发启动
+        async with self._execution_lock:
+            # 如果任务已在运行，直接返回成功
+            if self.status == TimerTaskStatus.RUNNING and self.timer_task and not self.timer_task.done():
+                self.logger.debug("定时任务已在运行中，跳过重复启动")
+                return True
+            
+            # 检查推送服务是否初始化
+            if not self.push_service:
+                self.logger.error("推送服务未初始化，无法启动定时任务")
+                return False
+            
+            # 检查定时功能是否启用
+            if not config.timer_enabled:
+                self.logger.info("定时功能未启用，跳过启动")
+                return False
+            
+            # 验证配置
+            if not self._validate_timer_config(config):
+                self.logger.error("定时配置验证失败")
+                return False
+            
+            # 检查unified_msg_origin可用性
+            missing_origins = []
+            for group_id in config.timer_target_groups:
+                if str(group_id) not in self.push_service.group_unified_msg_origins:
+                    missing_origins.append(str(group_id))
+            
+            if missing_origins:
+                self.logger.warning(f"⚠️ 以下群组缺少unified_msg_origin: {', '.join(missing_origins)}")
+                self.logger.info("💡 解决方案: 在对应群组中发送任意消息以收集unified_msg_origin")
+                self.logger.info("📝 定时任务仍会启动，但推送时会失败直到unified_msg_origin被收集")
+                self.logger.info("📋 提示: 可以使用 #手动推送发言榜 命令测试推送功能")
+            
+            # 如果任务已在运行，先停止（不再需要，因为已在锁内检查）
+            if self.timer_task and not self.timer_task.done():
+                self._stop_event.set()
+                self.timer_task.cancel()
+                try:
+                    await self.timer_task
+                except asyncio.CancelledError:
+                    pass
+                self._stop_event.clear()
+            
+            # 设置状态
+            self.status = TimerTaskStatus.RUNNING
+            
+            # 计算下次推送时间
+            self.next_push_time = self._calculate_next_push_time(config.timer_push_time)
+            
+            # 启动定时任务
+            self.timer_task = asyncio.create_task(self._timer_loop(config))
+            
+            self.logger.info(f"定时任务已启动，下次推送时间: {self.next_push_time}")
+            return True
     
     @safe_timer_operation(default_return=False)
     async def stop_timer(self) -> bool:
@@ -302,27 +319,53 @@ class TimerManager:
                 # 检查是否到达推送时间
                 now = datetime.now()
                 if self.next_push_time and now >= self.next_push_time:
-                    # 执行推送任务
-                    self.logger.info("开始执行定时推送任务")
-                    success = await self._execute_push_task(config)
-                    if success:
-                        self.logger.info("✅ 定时推送任务执行成功")
-                    else:
-                        self.logger.error("❌ 定时推送任务执行失败")
+                    # 使用执行锁防止重复推送
+                    if self._is_executing:
+                        self.logger.debug("推送任务正在执行中，跳过本次触发")
+                        await asyncio.sleep(10)  # 短暂等待后再检查
+                        continue
                     
-                    # 计算下次推送时间
-                    self.next_push_time = self._calculate_next_push_time(config.timer_push_time)
-                    self.logger.info(f"下次推送时间: {self.next_push_time}")
+                    # 尝试获取锁
+                    async with self._execution_lock:
+                        # 双重检查：获取锁后再次确认是否需要执行
+                        if self._is_executing:
+                            self.logger.debug("推送任务正在执行中（锁内检查），跳过")
+                            continue
+                        
+                        # 再次检查时间（可能已被其他实例更新）
+                        if self.next_push_time and datetime.now() < self.next_push_time:
+                            self.logger.debug("推送时间已被更新，跳过本次执行")
+                            continue
+                        
+                        # 立即更新下次推送时间，防止其他检查再次触发
+                        self.next_push_time = self._calculate_next_push_time(config.timer_push_time)
+                        self._is_executing = True
+                    
+                    try:
+                        # 执行推送任务
+                        self.logger.info("开始执行定时推送任务")
+                        success = await self._execute_push_task(config)
+                        if success:
+                            self.logger.info("✅ 定时推送任务执行成功")
+                        else:
+                            self.logger.error("❌ 定时推送任务执行失败")
+                        
+                        self.logger.info(f"下次推送时间: {self.next_push_time}")
+                    finally:
+                        # 确保释放执行标志
+                        self._is_executing = False
                 
                 # 等待一段时间后再次检查
                 await asyncio.sleep(60)  # 每分钟检查一次
                 
         except asyncio.CancelledError:
             self.logger.info("定时任务被取消")
+            self._is_executing = False
         except (OSError, IOError, RuntimeError, ValueError) as e:
             # 捕获定时任务循环中的系统级、运行时和数值错误
             self.logger.error(f"定时任务循环异常: {e}")
             self.status = TimerTaskStatus.ERROR
+            self._is_executing = False
             # 5分钟后重试
             await asyncio.sleep(300)
             if not self._stop_event.is_set():
@@ -524,6 +567,9 @@ class TimerManager:
     def _validate_timer_config(self, config) -> bool:
         """验证定时配置
         
+        只验证配置格式是否正确，不检查 unified_msg_origin 可用性
+        （unified_msg_origin 检查在 start_timer 中进行）
+        
         Args:
             config: 插件配置对象
             
@@ -541,18 +587,6 @@ class TimerManager:
                 self.logger.error("未配置目标群组")
                 return False
             
-            # 验证群组的unified_msg_origin可用性
-            missing_origins = []
-            for group_id in config.timer_target_groups:
-                if str(group_id) not in self.push_service.group_unified_msg_origins:
-                    missing_origins.append(str(group_id))
-            
-            if missing_origins:
-                self.logger.warning(f"⚠️ 以下群组缺少unified_msg_origin: {', '.join(missing_origins)}")
-                self.logger.info("💡 解决方案: 在对应群组中发送任意消息以收集unified_msg_origin")
-                self.logger.info("📋 提示: 可以使用 #手动推送 命令测试推送功能")
-                self.logger.info("📝 定时任务仍会启动，但推送时会失败直到unified_msg_origin被收集")
-            
             # 验证排行榜类型
             try:
                 self._parse_rank_type(config.timer_rank_type)
@@ -563,7 +597,6 @@ class TimerManager:
             return True
             
         except (ValueError, TypeError, KeyError, RuntimeError) as e:
-            # 捕获配置验证时的数值、类型、键和运行时错误
             self.logger.error(f"验证定时配置时发生错误: {e}")
             return False
     
@@ -878,6 +911,9 @@ class TimerManager:
     async def update_config(self, config, group_unified_msg_origins: Dict[str, str] = None) -> bool:
         """更新定时配置
         
+        注意：此方法只更新 unified_msg_origin 映射表，不会重复启动已运行的定时任务。
+        如果定时任务需要重启（如配置变更），会先停止再启动。
+        
         Args:
             config: 新的插件配置对象
             group_unified_msg_origins: 新的群组unified_msg_origin映射表
@@ -887,35 +923,37 @@ class TimerManager:
         """
         try:
             # 更新群组unified_msg_origin映射表
-            if group_unified_msg_origins and self.push_service:
+            if group_unified_msg_origins is not None and self.push_service:
                 self.push_service.group_unified_msg_origins = group_unified_msg_origins
+                self.group_unified_msg_origins = group_unified_msg_origins
             
-            # 如果定时任务正在运行，需要重新启动
-            was_running = self.status == TimerTaskStatus.RUNNING
+            # 检查定时任务状态
+            is_running = self.status == TimerTaskStatus.RUNNING and self.timer_task and not self.timer_task.done()
             
-            if was_running:
-                await self.stop_timer()
+            # 如果定时功能被禁用，停止已运行的任务
+            if not config.timer_enabled:
+                if is_running:
+                    await self.stop_timer()
+                    self.logger.info("定时功能已禁用，定时任务已停止")
+                return True
             
-            # 重新启动定时任务
-            if config.timer_enabled:
-                if self.context and self.push_service:
-                    # 完整功能模式
-                    success = await self.start_timer(config)
-                    if success:
-                        self.logger.info("定时配置已更新，定时任务重启成功")
-                    else:
-                        self.logger.warning("定时配置已更新，但定时任务重启失败")
-                    return success
+            # 如果定时任务已在运行，只更新映射表，不重新启动
+            if is_running:
+                self.logger.info("定时配置已更新（unified_msg_origin映射表已刷新）")
+                return True
+            
+            # 如果定时任务未运行，尝试启动
+            if self.context and self.push_service:
+                success = await self.start_timer(config)
+                if success:
+                    self.logger.info("定时配置已更新，定时任务启动成功")
                 else:
-                    # 受限模式（无context）
-                    self.logger.warning("定时功能已启用，但缺少上下文信息，无法执行实际推送")
-                    self.status = TimerTaskStatus.STOPPED
-                    return True  # 返回成功，因为配置更新本身是成功的
+                    self.logger.warning("定时配置已更新，但定时任务启动失败")
+                return success
             else:
-                self.logger.info("定时功能未启用")
+                self.logger.warning("定时功能已启用，但缺少上下文信息，无法执行实际推送")
                 return True
             
         except (ValueError, TypeError, KeyError, RuntimeError, OSError, IOError) as e:
-            # 捕获更新配置时的数值、类型、键、运行时和系统错误
             self.logger.error(f"更新定时配置失败: {e}")
             return False
