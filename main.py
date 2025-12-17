@@ -157,7 +157,7 @@ class MessageStatsPlugin(Star):
             return PluginConfig()
         
     async def _collect_group_unified_msg_origin(self, event: AstrMessageEvent):
-        """收集群组的unified_msg_origin
+        """收集群组的unified_msg_origin和群组名称
         
         Args:
             event: 消息事件对象
@@ -167,35 +167,78 @@ class MessageStatsPlugin(Star):
             unified_msg_origin = event.unified_msg_origin
             
             if group_id and unified_msg_origin:
+                group_id_str = str(group_id)
+                
                 # 检查是否是新的unified_msg_origin
-                old_origin = self.group_unified_msg_origins.get(str(group_id))
-                self.group_unified_msg_origins[str(group_id)] = unified_msg_origin
+                old_origin = self.group_unified_msg_origins.get(group_id_str)
+                self.group_unified_msg_origins[group_id_str] = unified_msg_origin
                 
                 if old_origin != unified_msg_origin:
                     self.logger.info(f"已收集群组 {group_id} 的 unified_msg_origin")
                     
-                    # 如果定时任务正在运行且需要此群组，重新启动定时任务
+                    # 尝试获取并缓存群组名称
+                    await self._cache_group_name(event, group_id_str)
+                    
+                    # 如果定时任务正在运行且需要此群组，更新配置
                     if self.timer_manager:
                         # 记录当前unified_msg_origin状态（安全截断）
                         origin_preview = unified_msg_origin[:20] + "..." if len(unified_msg_origin) > 20 else unified_msg_origin
                         self.logger.info(f"群组 {group_id} 的 unified_msg_origin: {origin_preview}")
                         
-                        if self.plugin_config.timer_enabled and str(group_id) in self.plugin_config.timer_target_groups:
-                            self.logger.info(f"检测到目标群组 {group_id} 的 unified_msg_origin 已更新，重新启动定时任务...")
+                        if self.plugin_config.timer_enabled and group_id_str in self.plugin_config.timer_target_groups:
+                            self.logger.info(f"检测到目标群组 {group_id} 的 unified_msg_origin 已更新，更新定时任务配置...")
                             # 确保unified_msg_origin映射表是最新的
                             self.timer_manager.push_service.group_unified_msg_origins = self.group_unified_msg_origins
                             success = await self.timer_manager.update_config(self.plugin_config, self.group_unified_msg_origins)
                             if success:
-                                self.logger.info(f"定时任务重新启动成功")
+                                self.logger.info(f"定时任务配置更新成功")
                             else:
-                                self.logger.warning(f"定时任务重新启动失败")
+                                self.logger.warning(f"定时任务配置更新失败")
                 
 
         except (AttributeError, KeyError, TypeError) as e:
             self.logger.error(f"收集群组unified_msg_origin失败: {e}")
         except (RuntimeError, OSError, IOError, ImportError, ValueError) as e:
-            # 修复：替换过于宽泛的Exception为具体异常类型
             self.logger.error(f"收集群组unified_msg_origin失败(系统错误): {e}")
+    async def _cache_group_name(self, event: AstrMessageEvent, group_id: str):
+        """获取并缓存群组名称
+        
+        从事件或API获取群组名称，更新到 timer_manager 的缓存和数据文件中。
+        
+        Args:
+            event: 消息事件对象
+            group_id: 群组ID
+        """
+        try:
+            group_name = None
+            
+            # 方法1: 尝试通过 bot API 获取群组信息
+            if hasattr(event, 'bot') and event.bot:
+                try:
+                    if hasattr(event.bot, 'api'):
+                        group_info = await event.bot.api.call_action(
+                            'get_group_info', 
+                            group_id=int(group_id)
+                        )
+                        if group_info and isinstance(group_info, dict):
+                            group_name = group_info.get('group_name')
+                except (AttributeError, TypeError, ValueError, asyncio.TimeoutError) as e:
+                    self.logger.debug(f"通过API获取群名失败: {e}")
+            
+            # 如果获取到群名，更新缓存
+            if group_name:
+                self.logger.info(f"已获取群组 {group_id} 的名称: {group_name}")
+                
+                # 更新到 timer_manager 的内存缓存
+                if self.timer_manager:
+                    self.timer_manager.update_group_name_cache(group_id, group_name)
+                
+                # 更新到数据文件（下次保存时会自动包含）
+                # 这里我们可以单独保存群名，但为了简化，我们只更新内存缓存
+                # 群名会在下次保存群组数据时一并保存
+                
+        except (AttributeError, KeyError, TypeError, RuntimeError) as e:
+            self.logger.debug(f"缓存群组名称失败: {e}")
     
     async def _collect_group_unified_msg_origins(self):
         """收集所有群组的unified_msg_origin（从缓存中获取）"""

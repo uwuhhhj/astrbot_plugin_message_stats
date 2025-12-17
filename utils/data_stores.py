@@ -87,17 +87,44 @@ class GroupDataStore:
             self.logger.error(f"读取群组数据失败 {group_id}: {e}")
             return []
     
-    async def save_group_data(self, group_id: str, users: List[UserData]) -> bool:
-        """保存群组数据"""
+    async def save_group_data(self, group_id: str, users: List[UserData], group_name: str = None) -> bool:
+        """保存群组数据
+        
+        Args:
+            group_id: 群组ID
+            users: 用户数据列表
+            group_name: 可选的群组名称，如果提供则保存到数据文件中
+            
+        Returns:
+            bool: 保存是否成功
+        """
         file_path = self._get_group_file_path(group_id)
         
         try:
+            # 尝试读取现有数据以保留 group_name
+            existing_group_name = None
+            if await aiofiles.os.path.exists(file_path):
+                try:
+                    async with aiofiles.open(str(file_path), 'r', encoding='utf-8') as f:
+                        content = await f.read()
+                        if content.strip():
+                            existing_data = json.loads(content)
+                            if isinstance(existing_data, dict):
+                                existing_group_name = existing_data.get('group_name')
+                except (json.JSONDecodeError, IOError):
+                    pass
+            
             # 准备数据
             data = {
                 'group_id': group_id,
                 'last_updated': datetime.now().isoformat(),
                 'users': [user.to_dict() for user in users]
             }
+            
+            # 如果提供了新的 group_name，使用新的；否则保留原有的
+            final_group_name = group_name or existing_group_name
+            if final_group_name:
+                data['group_name'] = final_group_name
             
             json_content = await asyncio.to_thread(json.dumps, data, ensure_ascii=False, indent=2)
             async with aiofiles.open(str(file_path), 'w', encoding='utf-8') as f:

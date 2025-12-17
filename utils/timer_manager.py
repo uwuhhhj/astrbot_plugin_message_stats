@@ -17,7 +17,15 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 from pathlib import Path
 import aiofiles
-from croniter import croniter
+
+# croniter 是可选依赖，用于支持 cron 表达式
+try:
+    from croniter import croniter
+    CRONITER_AVAILABLE = True
+except ImportError:
+    croniter = None
+    CRONITER_AVAILABLE = False
+
 from astrbot.api import logger as astrbot_logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 # PlatformAdapterType 在 astrbot.api.event.filter 中
@@ -169,6 +177,10 @@ class TimerManager:
         # 添加执行锁，防止重复推送
         self._execution_lock = asyncio.Lock()
         self._is_executing = False
+        
+        # 群组名称缓存（group_id -> group_name）
+        # 可以通过 update_group_name_cache 方法从外部更新
+        self._group_name_cache: Dict[str, str] = {}
         
         # 记录初始化状态
         if context:
@@ -417,8 +429,36 @@ class TimerManager:
             self.logger.error(f"💥 定时推送完全失败: 0/{total_count} 个群组推送成功")
             return False
     
+    def update_group_name_cache(self, group_id: str, group_name: str):
+        """更新群组名称缓存
+        
+        此方法供外部（如 main.py）调用，在获取到群组名称时更新缓存。
+        
+        Args:
+            group_id: 群组ID
+            group_name: 群组名称
+        """
+        if group_id and group_name:
+            self._group_name_cache[str(group_id)] = str(group_name)
+            self.logger.debug(f"群组名称缓存已更新: {group_id} -> {group_name}")
+    
+    def update_group_name_cache_batch(self, group_names: Dict[str, str]):
+        """批量更新群组名称缓存
+        
+        Args:
+            group_names: 群组ID到名称的映射字典
+        """
+        if group_names:
+            self._group_name_cache.update(group_names)
+            self.logger.debug(f"群组名称缓存批量更新: {len(group_names)} 个群组")
+
     async def _get_group_name(self, group_id: str) -> str:
         """获取群组名称
+        
+        优先级：
+        1. 内存缓存（_group_name_cache）
+        2. 数据文件中的 group_name 字段
+        3. 默认格式（群+ID）
         
         Args:
             group_id: 群组ID
@@ -426,8 +466,16 @@ class TimerManager:
         Returns:
             str: 群组名称，如果获取失败则返回默认格式
         """
+        group_id_str = str(group_id)
+        
+        # 1. 优先从内存缓存获取
+        if group_id_str in self._group_name_cache:
+            cached_name = self._group_name_cache[group_id_str]
+            if cached_name:
+                return cached_name
+        
         try:
-            # 从缓存文件获取群组名称
+            # 2. 从数据文件获取群组名称
             group_file_path = self.data_manager.groups_dir / f"{group_id}.json"
             
             if await aiofiles.os.path.exists(group_file_path):
@@ -436,9 +484,12 @@ class TimerManager:
                     if content.strip():
                         data = json.loads(content)
                         
-                        # 优先从 group_name 字段获取（数据文件直接存储）
+                        # 优先从 group_name 字段获取
                         if isinstance(data, dict) and data.get('group_name'):
-                            return str(data['group_name']).strip()
+                            group_name = str(data['group_name']).strip()
+                            # 更新到内存缓存
+                            self._group_name_cache[group_id_str] = group_name
+                            return group_name
                         
                         # 尝试从用户数据中推断群组名称
                         if isinstance(data, list) and len(data) > 0:
@@ -446,19 +497,17 @@ class TimerManager:
                             if isinstance(first_user, dict):
                                 for key in ['group_name', 'group_name_cn', '群名', '群组名', 'name', 'title']:
                                     if key in first_user and first_user[key]:
-                                        return str(first_user[key]).strip()
-                                if 'group_info' in first_user and isinstance(first_user['group_info'], dict):
-                                    for key in ['name', 'title', 'group_name']:
-                                        if key in first_user['group_info'] and first_user['group_info'][key]:
-                                            return str(first_user['group_info'][key]).strip()
+                                        group_name = str(first_user[key]).strip()
+                                        self._group_name_cache[group_id_str] = group_name
+                                        return group_name
                         elif isinstance(data, dict):
                             for key in ['group_name', 'group_name_cn', '群名', '群组名', 'name', 'title']:
                                 if key in data and data[key]:
-                                    return str(data[key]).strip()
+                                    group_name = str(data[key]).strip()
+                                    self._group_name_cache[group_id_str] = group_name
+                                    return group_name
             
-            # 定时推送时无法通过 API 获取群组名称
-            # 因为 Context 对象不包含 bot 属性
-            # 返回默认格式
+            # 3. 返回默认格式
             return f"群{group_id}"
             
         except (OSError, IOError, ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
@@ -606,19 +655,25 @@ class TimerManager:
         Args:
             time_str: 时间字符串，支持两种格式：
                 - 简单格式: "HH:MM" (每日指定时间推送)
-                - Cron格式: "0 9 * * *" (支持复杂的定时表达式)
+                - Cron格式: "0 9 * * *" (需要安装 croniter)
             
         Returns:
             bool: 格式是否有效
         """
-        # 首先尝试 cron 格式
-        try:
-            croniter(time_str)
+        # 首先尝试简单格式 HH:MM
+        pattern = r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+        if re.match(pattern, time_str):
             return True
-        except (ValueError, TypeError):
-            # cron 格式失败后尝试简单格式
-            pattern = r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
-            return bool(re.match(pattern, time_str))
+        
+        # 如果 croniter 可用，尝试 cron 格式
+        if CRONITER_AVAILABLE and croniter:
+            try:
+                croniter(time_str)
+                return True
+            except (ValueError, TypeError):
+                pass
+        
+        return False
     
     def _calculate_next_push_time(self, push_time: str) -> datetime:
         """计算下次推送时间
@@ -626,7 +681,7 @@ class TimerManager:
         Args:
             push_time: 推送时间，支持两种格式：
                 - 简单格式: "HH:MM" (每日指定时间)
-                - Cron格式: "0 9 * * *" (支持复杂定时表达式)
+                - Cron格式: "0 9 * * *" (需要安装 croniter)
             
         Returns:
             datetime: 下次推送时间
@@ -635,27 +690,34 @@ class TimerManager:
             # 获取当前时间
             now = datetime.now()
             
-            # 首先尝试使用 cron 格式
-            try:
-                cron = croniter(push_time, now)
-                next_time = cron.get_next(datetime)
-                return next_time
-            except (ValueError, TypeError):
-                # 如果 cron 格式失败，则使用简单格式 "HH:MM"
-                if not ':' in push_time:
-                    raise ValueError("不支持的时间格式")
-                
-                hour, minute = map(int, push_time.split(':'))
-                target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                
-                # 如果今天的时间已过，则推到明天
-                if target_time <= now:
-                    target_time += timedelta(days=1)
-                
-                return target_time
+            # 首先尝试简单格式 "HH:MM"
+            if ':' in push_time:
+                parts = push_time.split(':')
+                if len(parts) == 2:
+                    try:
+                        hour, minute = int(parts[0]), int(parts[1])
+                        if 0 <= hour <= 23 and 0 <= minute <= 59:
+                            target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                            # 如果今天的时间已过，则推到明天
+                            if target_time <= now:
+                                target_time += timedelta(days=1)
+                            return target_time
+                    except ValueError:
+                        pass
+            
+            # 如果 croniter 可用，尝试 cron 格式
+            if CRONITER_AVAILABLE and croniter:
+                try:
+                    cron = croniter(push_time, now)
+                    next_time = cron.get_next(datetime)
+                    return next_time
+                except (ValueError, TypeError):
+                    pass
+            
+            # 格式无效，返回默认时间
+            raise ValueError(f"不支持的时间格式: {push_time}")
             
         except (ValueError, TypeError, OSError, IOError) as e:
-            # 捕获计算推送时间时的数值、类型和系统错误
             self.logger.error(f"计算下次推送时间失败: {e}")
             # 返回默认时间（明早9点）
             tomorrow = datetime.now() + timedelta(days=1)
