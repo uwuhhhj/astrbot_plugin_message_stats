@@ -135,6 +135,7 @@ class TimerManager:
     2. 修复API调用错误
     3. 实现真正的自动化推送
     4. 增强错误处理和诊断
+    5. 使用类级别的全局锁防止多实例重复执行
     
     Attributes:
         data_manager (DataManager): 数据管理器实例
@@ -150,6 +151,12 @@ class TimerManager:
         >>> await timer_manager.start_timer(config)
         >>> status = await timer_manager.get_status()
     """
+    
+    # 类级别的全局锁和标志，确保所有实例共享
+    _global_execution_lock: Optional[asyncio.Lock] = None
+    _global_is_executing: bool = False
+    _global_next_push_time: Optional[datetime] = None
+    
     
     def __init__(self, data_manager: DataManager, image_generator: ImageGenerator, context=None, group_unified_msg_origins: Dict[str, str] = None):
         """初始化定时任务管理器
@@ -174,7 +181,11 @@ class TimerManager:
         self.logger = astrbot_logger
         self._stop_event = asyncio.Event()
         
-        # 添加执行锁，防止重复推送
+        # 初始化类级别的全局锁（只在第一个实例时创建）
+        if TimerManager._global_execution_lock is None:
+            TimerManager._global_execution_lock = asyncio.Lock()
+        
+        # 实例级别的锁（用于非关键操作）
         self._execution_lock = asyncio.Lock()
         self._is_executing = False
         
@@ -331,27 +342,29 @@ class TimerManager:
                 # 检查是否到达推送时间
                 now = datetime.now()
                 if self.next_push_time and now >= self.next_push_time:
-                    # 使用执行锁防止重复推送
-                    if self._is_executing:
-                        self.logger.debug("推送任务正在执行中，跳过本次触发")
+                    # 使用全局执行标志快速检查（无锁）
+                    if TimerManager._global_is_executing:
+                        self.logger.debug("全局推送任务正在执行中，跳过本次触发")
                         await asyncio.sleep(10)  # 短暂等待后再检查
                         continue
                     
-                    # 尝试获取锁
-                    async with self._execution_lock:
+                    # 使用全局锁防止多实例重复推送
+                    async with TimerManager._global_execution_lock:
                         # 双重检查：获取锁后再次确认是否需要执行
-                        if self._is_executing:
-                            self.logger.debug("推送任务正在执行中（锁内检查），跳过")
+                        if TimerManager._global_is_executing:
+                            self.logger.debug("全局推送任务正在执行中（锁内检查），跳过")
                             continue
                         
-                        # 再次检查时间（可能已被其他实例更新）
-                        if self.next_push_time and datetime.now() < self.next_push_time:
-                            self.logger.debug("推送时间已被更新，跳过本次执行")
+                        # 检查全局时间（可能已被其他实例更新）
+                        if TimerManager._global_next_push_time and datetime.now() < TimerManager._global_next_push_time:
+                            self.logger.debug("全局推送时间已被更新，跳过本次执行")
                             continue
                         
-                        # 立即更新下次推送时间，防止其他检查再次触发
-                        self.next_push_time = self._calculate_next_push_time(config.timer_push_time)
-                        self._is_executing = True
+                        # 立即更新全局和实例的下次推送时间
+                        next_time = self._calculate_next_push_time(config.timer_push_time)
+                        self.next_push_time = next_time
+                        TimerManager._global_next_push_time = next_time
+                        TimerManager._global_is_executing = True
                     
                     try:
                         # 执行推送任务
@@ -364,20 +377,19 @@ class TimerManager:
                         
                         self.logger.info(f"下次推送时间: {self.next_push_time}")
                     finally:
-                        # 确保释放执行标志
-                        self._is_executing = False
+                        # 确保释放全局执行标志
+                        TimerManager._global_is_executing = False
                 
                 # 等待一段时间后再次检查
                 await asyncio.sleep(60)  # 每分钟检查一次
                 
         except asyncio.CancelledError:
             self.logger.info("定时任务被取消")
-            self._is_executing = False
+            TimerManager._global_is_executing = False
         except (OSError, IOError, RuntimeError, ValueError) as e:
-            # 捕获定时任务循环中的系统级、运行时和数值错误
             self.logger.error(f"定时任务循环异常: {e}")
             self.status = TimerTaskStatus.ERROR
-            self._is_executing = False
+            TimerManager._global_is_executing = False
             # 5分钟后重试
             await asyncio.sleep(300)
             if not self._stop_event.is_set():
