@@ -364,26 +364,12 @@ class MessageStatsPlugin(Star):
             from .utils.timer_manager import TimerManager
             self.timer_manager = TimerManager(self.data_manager, self.image_generator, self.context, self.group_unified_msg_origins)
             self.logger.info("定时任务管理器初始化成功")
-            
-            # 尝试启动定时任务（不阻塞初始化过程）
-            if self.plugin_config.timer_enabled:
-                self.logger.info("检测到定时功能已启用，尝试启动定时任务...")
-                try:
-                    # 使用update_config启动，确保group_unified_msg_origins被正确传递
-                    success = await self.timer_manager.update_config(self.plugin_config, self.group_unified_msg_origins)
-                    if success:
-                        self.logger.info("定时任务启动成功")
-                    else:
-                        self.logger.warning("定时任务启动失败，可能是因为群组unified_msg_origin尚未收集")
-                except (ImportError, AttributeError) as timer_error:
-                    self.logger.warning(f"定时任务启动失败: {timer_error}")
-                    # 即使定时任务启动失败，也不影响TimerManager的创建
+            # 注意：定时任务的启动在 _setup_caches 中统一进行，避免重复启动
                     
         except (ImportError, OSError, IOError) as e:
             self.logger.warning(f"定时任务管理器初始化失败: {e}")
             self.timer_manager = None
         except (RuntimeError, AttributeError, ValueError, TypeError, ConnectionError, asyncio.TimeoutError) as e:
-            # 修复：替换过于宽泛的Exception为具体异常类型
             self.logger.warning(f"定时任务管理器初始化失败(运行时错误): {e}")
             self.timer_manager = None
     
