@@ -28,6 +28,8 @@ git clone https://github.com/xiaoruange39/astrbot_plugin_message_stats.git
 - `#今日发言榜` - 查看今日发言排行榜  
 - `#本周发言榜` - 查看本周发言排行榜
 - `#本月发言榜` - 查看本月发言排行榜
+- `#本年发言榜` - 查看本年发言排行榜
+- `#去年发言榜` - 查看去年发言排行榜
 
 #### 管理命令
 - `#设置发言榜数量 [数量]` - 设置排行榜显示人数（1-100）
@@ -86,6 +88,8 @@ git clone https://github.com/xiaoruange39/astrbot_plugin_message_stats.git
 - `timer_time`: 定时推送时间（格式：HH:MM）
 - `timer_groups`: 定时推送群组列表
 - `timer_type`: 定时推送类型（1=图片，0=文字）
+- `blocked_users`: 屏蔽用户列表（不统计发言且不显示在排行榜）
+- `blocked_groups`: 屏蔽群聊列表（不统计发言且无法使用指令）
 
 ### 配置方式
 1. 通过命令配置（推荐）

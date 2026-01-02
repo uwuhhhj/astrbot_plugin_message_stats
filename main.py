@@ -61,11 +61,11 @@ class MessageStatsPlugin(Star):
     """群发言统计插件
     
     该插件用于统计群组成员的发言次数,并生成多种类型的排行榜.
-    支持自动监听群消息、手动记录、总榜/日榜/周榜/月榜等功能.
+    支持自动监听群消息、手动记录、总榜/日榜/周榜/月榜/年榜等功能.
     
     主要功能:
         - 自动监听和记录群成员发言统计
-        - 支持多种排行榜类型(总榜、日榜、周榜、月榜)
+        - 支持多种排行榜类型(总榜、日榜、周榜、月榜、年榜)
         - 提供图片和文字两种显示模式
         - 完整的配置管理系统
         - 权限控制和安全管理
@@ -78,6 +78,7 @@ class MessageStatsPlugin(Star):
         - 日榜: 今日发言榜 → 今日排行、日榜、今日发言排行、今日排行榜
         - 周榜: 本周发言榜 → 本周排行、周榜、本周发言排行、本周排行榜
         - 月榜: 本月发言榜 → 本月排行、月榜、本月发言排行、本月排行榜
+        - 年榜: 本年发言榜 → 本年排行、年榜、本年发言排行、本年排行榜
         
     Attributes:
         data_manager (DataManager): 数据管理器,负责数据的存储和读取
@@ -477,6 +478,12 @@ class MessageStatsPlugin(Star):
         if self._is_bot_message(event, user_id):
             return
         
+        # 检查群聊是否在屏蔽列表中
+        if self._is_blocked_group(group_id):
+            if self.plugin_config.detailed_logging_enabled:
+                self.logger.debug(f"群聊 {group_id} 在屏蔽列表中，跳过统计")
+            return
+        
         # 收集群组的unified_msg_origin（重要：用于定时推送）
         await self._collect_group_unified_msg_origin(event)
         
@@ -658,6 +665,18 @@ class MessageStatsPlugin(Star):
     async def show_monthly_rank(self, event: AstrMessageEvent):
         """显示本月排行榜，别名：本月水群榜/本月发言排行/本月B话榜"""
         async for result in self._show_rank(event, RankType.MONTHLY):
+            yield result
+    
+    @filter.command("本年发言榜", alias={'本年水群榜', '本年发言排行', '本年B话榜', '年榜'})
+    async def show_yearly_rank(self, event: AstrMessageEvent):
+        """显示本年排行榜，别名：本年水群榜/本年发言排行/本年B话榜/年榜"""
+        async for result in self._show_rank(event, RankType.YEARLY):
+            yield result
+    
+    @filter.command("去年发言榜", alias={'去年水群榜', '去年发言排行', '去年B话榜'})
+    async def show_last_year_rank(self, event: AstrMessageEvent):
+        """显示去年排行榜，别名：去年水群榜/去年发言排行/去年B话榜"""
+        async for result in self._show_rank(event, RankType.LAST_YEAR):
             yield result
     
     # ========== 设置命令 ==========
@@ -1132,6 +1151,28 @@ class MessageStatsPlugin(Star):
         # 检查是否在屏蔽列表中
         return user_id_str in [str(uid) for uid in blocked_users]
     
+    def _is_blocked_group(self, group_id: str) -> bool:
+        """检查群聊是否在屏蔽列表中
+        
+        Args:
+            group_id (str): 群聊ID
+            
+        Returns:
+            bool: 如果群聊在屏蔽列表中返回True，否则返回False
+        """
+        if not hasattr(self, 'plugin_config') or not self.plugin_config:
+            return False
+        
+        blocked_groups = getattr(self.plugin_config, 'blocked_groups', [])
+        if not blocked_groups:
+            return False
+        
+        # 将群聊ID转换为字符串进行比较
+        group_id_str = str(group_id)
+        
+        # 检查是否在屏蔽列表中
+        return group_id_str in [str(gid) for gid in blocked_groups]
+    
     async def _get_group_members_cache(self, event: AstrMessageEvent, group_id: str) -> Optional[List[Dict[str, Any]]]:
         """获取群成员缓存"""
         cache_key = f"group_members_{group_id}"
@@ -1205,6 +1246,11 @@ class MessageStatsPlugin(Star):
     async def _show_rank(self, event: AstrMessageEvent, rank_type: RankType):
         """显示排行榜 - 重构版本"""
         try:
+            # 检查群聊是否在屏蔽列表中
+            group_id = event.get_group_id()
+            if group_id and self._is_blocked_group(str(group_id)):
+                return
+            
             # 准备数据
             rank_data = await self._prepare_rank_data(event, rank_type)
             if rank_data is None:
@@ -1419,6 +1465,16 @@ class MessageStatsPlugin(Star):
             # 获取本月开始日期
             month_start = current_date.replace(day=1)
             return month_start, current_date, "monthly"
+        elif rank_type == RankType.YEARLY:
+            # 获取本年开始日期
+            year_start = current_date.replace(month=1, day=1)
+            return year_start, current_date, "yearly"
+        elif rank_type == RankType.LAST_YEAR:
+            # 获取去年的时间范围（1月1日 - 12月31日）
+            last_year = current_date.year - 1
+            year_start = date(last_year, 1, 1)
+            year_end = date(last_year, 12, 31)
+            return year_start, year_end, "lastyear"
         else:
             return None, None, "unknown"
     
@@ -1439,7 +1495,7 @@ class MessageStatsPlugin(Star):
             return self._calculate_daily_rank(group_data, start_date, end_date)
         
         # 对于周榜和月榜，使用优化策略（现在是异步方法）
-        elif rank_type in [RankType.WEEKLY, RankType.MONTHLY]:
+        elif rank_type in [RankType.WEEKLY, RankType.MONTHLY, RankType.YEARLY, RankType.LAST_YEAR]:
             return await self._calculate_period_rank_optimized(group_data, start_date, end_date)
         
         return []
@@ -1561,6 +1617,11 @@ class MessageStatsPlugin(Star):
             return f"本周[{now.year}年{now.month}月第{week_num}周]发言榜单"
         elif rank_type == RankType.MONTHLY:
             return f"本月[{now.year}年{now.month}月]发言榜单"
+        elif rank_type == RankType.YEARLY:
+            return f"本年[{now.year}年]发言榜单"
+        elif rank_type == RankType.LAST_YEAR:
+            last_year = now.year - 1
+            return f"去年[{last_year}年]发言榜单"
         else:
             return "发言榜单"
     

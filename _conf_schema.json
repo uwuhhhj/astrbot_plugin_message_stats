@@ -19,7 +19,10 @@
     "description": "排行榜输出模式",
     "hint": "选择排行榜的展示方式，图片模式更美观但消耗更多资源",
     "default": 1,
-    "options": [0, 1],
+    "options": [
+      0,
+      1
+    ],
     "obvious_hint": true
   },
   "timer_enabled": {
@@ -48,13 +51,27 @@
     "description": "定时推送排行榜类型",
     "hint": "选择定时推送的排行榜统计范围",
     "default": "daily",
-    "options": ["daily", "total", "weekly", "monthly"],
+    "options": [
+      "daily",
+      "total",
+      "weekly",
+      "monthly",
+      "yearly",
+      "lastyear"
+    ],
     "invisible": false
   },
   "blocked_users": {
     "type": "list",
     "description": "屏蔽用户列表",
     "hint": "屏蔽指定用户，使其不显示在发言榜上且不统计其发言数据。请输入完整的QQ号码。",
+    "default": [],
+    "obvious_hint": true
+  },
+  "blocked_groups": {
+    "type": "list",
+    "description": "屏蔽群聊列表",
+    "hint": "屏蔽指定群聊，使其不统计发言数据且无法使用排行榜指令。请输入完整的群号码。",
     "default": [],
     "obvious_hint": true
   }

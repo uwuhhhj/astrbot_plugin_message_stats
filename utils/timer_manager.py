@@ -753,7 +753,11 @@ class TimerManager:
             'week': RankType.WEEKLY,
             'weekly': RankType.WEEKLY,
             'month': RankType.MONTHLY,
-            'monthly': RankType.MONTHLY
+            'monthly': RankType.MONTHLY,
+            'year': RankType.YEARLY,
+            'yearly': RankType.YEARLY,
+            'lastyear': RankType.LAST_YEAR,
+            'last_year': RankType.LAST_YEAR
         }
         
         rank_type_str = rank_type_str.lower()
@@ -818,6 +822,17 @@ class TimerManager:
             # 获取本月开始日期
             month_start = get_month_start(current_date)
             return month_start, current_date
+        elif rank_type == RankType.YEARLY:
+            # 获取本年开始日期
+            year_start = current_date.replace(month=1, day=1)
+            return year_start, current_date
+        elif rank_type == RankType.LAST_YEAR:
+            # 获取去年的时间范围（1月1日 - 12月31日）
+            from datetime import date
+            last_year = current_date.year - 1
+            year_start = date(last_year, 1, 1)
+            year_end = date(last_year, 12, 31)
+            return year_start, year_end
         else:
             # 总榜不需要时间段过滤
             return None, None
@@ -843,6 +858,11 @@ class TimerManager:
             return f"本周[{now.year}年{now.month}月第{week_num}周]发言榜单"
         elif rank_type == RankType.MONTHLY:
             return f"本月[{now.year}年{now.month}月]发言榜单"
+        elif rank_type == RankType.YEARLY:
+            return f"本年[{now.year}年]发言榜单"
+        elif rank_type == RankType.LAST_YEAR:
+            last_year = now.year - 1
+            return f"去年[{last_year}年]发言榜单"
         else:
             return "发言榜单"
     

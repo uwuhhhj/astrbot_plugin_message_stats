@@ -26,13 +26,15 @@ except ImportError:
 class RankType(Enum):
     """排行榜类型枚举
     
-    定义了插件支持的排行榜类型，包括总榜、日榜、周榜和月榜。
+    定义了插件支持的排行榜类型，包括总榜、日榜、周榜、月榜、年榜和去年榜。
     
     Attributes:
         TOTAL (str): 总排行榜，包含历史所有发言统计
         DAILY (str): 日排行榜，仅包含当日发言统计
         WEEKLY (str): 周排行榜，仅包含本周发言统计
         MONTHLY (str): 月排行榜，仅包含本月发言统计
+        YEARLY (str): 年排行榜，仅包含本年发言统计
+        LAST_YEAR (str): 去年排行榜，仅包含去年全年发言统计
         
     Example:
         >>> rank_type = RankType.TOTAL
@@ -43,6 +45,8 @@ class RankType(Enum):
     DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+    YEARLY = "yearly"
+    LAST_YEAR = "lastyear"
 
 
 @dataclass
@@ -396,6 +400,9 @@ class PluginConfig:
         
         # 屏蔽用户列表
         self.blocked_users = []
+        
+        # 屏蔽群聊列表
+        self.blocked_groups = []
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典
@@ -428,7 +435,8 @@ class PluginConfig:
             "timer_push_time": self.timer_push_time,
             "timer_target_groups": self.timer_target_groups,
             "timer_rank_type": self.timer_rank_type,
-            "blocked_users": self.blocked_users
+            "blocked_users": self.blocked_users,
+            "blocked_groups": self.blocked_groups
         }
     
     @classmethod
@@ -474,6 +482,7 @@ class PluginConfig:
         config.timer_target_groups = data.get("timer_target_groups", [])
         config.timer_rank_type = data.get("timer_rank_type", "daily")
         config.blocked_users = data.get("blocked_users", [])
+        config.blocked_groups = data.get("blocked_groups", [])
         
         return config
 
