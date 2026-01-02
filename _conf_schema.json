@@ -11,8 +11,11 @@
     "description": "排行榜显示人数",
     "hint": "排行榜中显示的用户数量，建议5-50人",
     "default": 20,
-    "min": 1,
-    "max": 100
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
   },
   "if_send_pic": {
     "type": "int",
