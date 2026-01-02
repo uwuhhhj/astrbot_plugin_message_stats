@@ -172,7 +172,6 @@ astrbot_plugin_message_stats/
 感谢以下项目和插件的参考：
 - [AstrBot框架](https://astrbot.app/) - 强大的多平台聊天机器人框架
 - [yunzai-plugin-example](https://github.com/KaedeharaLu/yunzai-plugin-example) - 原始插件基础架构参考
-- AstrBot社区 - 提供的开发文档和技术支持
 
 ---
 
