@@ -179,7 +179,7 @@ class UserData:
         user_id (str): 用户唯一标识符
         nickname (str): 用户昵称
         message_count (int): 总发言次数，默认为0
-        history (List[MessageDate]): 发言日期历史记录列表
+        history (Dict[str, int]): 发言日期历史记录，key为YYYY-MM-DD，value为当日发言次数
         last_date (Optional[str]): 最后发言日期的字符串表示
         first_message_time (Optional[int]): 首次发言时间戳
         last_message_time (Optional[int]): 最后发言时间戳
@@ -200,7 +200,7 @@ class UserData:
     user_id: str
     nickname: str
     message_count: int = 0
-    history: List[MessageDate] = field(default_factory=list)
+    history: Dict[str, int] = field(default_factory=dict)
     last_date: Optional[str] = None
     first_message_time: Optional[int] = None
     last_message_time: Optional[int] = None
@@ -225,8 +225,9 @@ class UserData:
         """
         self.message_count += 1
         
-        # 每次发言都添加到历史记录中
-        self.history.append(message_date)
+        # 按日期聚合计数，避免按消息条数膨胀
+        date_str = str(message_date)
+        self.history[date_str] = self.history.get(date_str, 0) + 1
         
         # 更新最后发言日期
         self.last_date = str(message_date)
@@ -246,7 +247,19 @@ class UserData:
             >>> print(last_date.year)
             2024
         """
-        return self.history[-1] if self.history else None
+        if not self.history:
+            return None
+        latest_date = None
+        for date_str in self.history.keys():
+            try:
+                year, month, day = map(int, date_str.split('-'))
+                current = MessageDate(year, month, day)
+                if latest_date is None or latest_date < current:
+                    latest_date = current
+            except (ValueError, IndexError) as e:
+                logger.warning(f"跳过格式错误的日期记录 '{date_str}': {e}")
+                continue
+        return latest_date
     
     def get_message_count_in_period(self, start_date: date, end_date: date) -> int:
         """获取指定时间段内的消息数量
@@ -269,9 +282,15 @@ class UserData:
             2
         """
         count = 0
-        for hist_date in self.history:
-            if start_date <= hist_date.to_date() <= end_date:
-                count += 1
+        for date_str, day_count in self.history.items():
+            try:
+                year, month, day = map(int, date_str.split('-'))
+                hist_date = MessageDate(year, month, day)
+                if start_date <= hist_date.to_date() <= end_date:
+                    count += int(day_count)
+            except (ValueError, IndexError, TypeError) as e:
+                logger.warning(f"跳过格式错误的日期记录 '{date_str}': {e}")
+                continue
         return count
     
     def to_dict(self) -> Dict[str, Any]:
@@ -284,7 +303,7 @@ class UserData:
                 - user_id: 用户ID
                 - nickname: 用户昵称
                 - message_count: 总发言次数
-                - history: 发言日期历史（字符串列表）
+                - history: 发言日期历史（日期字符串到次数的映射）
                 - last_date: 最后发言日期
                 - first_message_time: 首次发言时间戳
                 - last_message_time: 最后发言时间戳
@@ -299,7 +318,7 @@ class UserData:
             "user_id": self.user_id,
             "nickname": self.nickname,
             "message_count": self.message_count,
-            "history": [str(h) for h in self.history],
+            "history": self.history,
             "last_date": self.last_date,
             "first_message_time": self.first_message_time,
             "last_message_time": self.last_message_time
@@ -336,21 +355,31 @@ class UserData:
             last_message_time=data.get("last_message_time")
         )
         
-        # 重建history
+        # 重建history（兼容旧版列表格式）
         if "history" in data:
-            try:
-                for hist_str in data["history"]:
+            history_data = data.get("history")
+            if isinstance(history_data, dict):
+                for date_str, day_count in history_data.items():
                     try:
-                        year, month, day = map(int, hist_str.split('-'))
-                        user_data.history.append(MessageDate(year, month, day))
-                    except (ValueError, IndexError) as e:
-                        # 跳过格式错误的日期记录，但记录警告
+                        year, month, day = map(int, str(date_str).split('-'))
+                        # 校验日期格式，计数存为int
+                        MessageDate(year, month, day)
+                        user_data.history[str(date_str)] = int(day_count)
+                    except (ValueError, IndexError, TypeError) as e:
+                        logger.warning(f"跳过格式错误的日期记录 '{date_str}': {e}")
+                        continue
+            elif isinstance(history_data, list):
+                # 旧格式：日期字符串列表，聚合为日期->次数
+                for hist_str in history_data:
+                    try:
+                        year, month, day = map(int, str(hist_str).split('-'))
+                        date_str = f"{year:04d}-{month:02d}-{day:02d}"
+                        user_data.history[date_str] = user_data.history.get(date_str, 0) + 1
+                    except (ValueError, IndexError, TypeError) as e:
                         logger.warning(f"跳过格式错误的日期记录 '{hist_str}': {e}")
                         continue
-            except TypeError as e:
-                # 如果history不是可迭代对象，跳过但记录更详细的警告
-                logger.warning(f"history字段类型错误，不是可迭代对象: {type(data.get('history'))}, 错误: {e}")
-                # 不使用pass，而是记录具体的错误信息
+            else:
+                logger.warning(f"history字段类型错误，不是dict或list: {type(history_data)}")
         
         return user_data
     
