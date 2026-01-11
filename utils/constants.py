@@ -34,7 +34,7 @@ ROW_HEIGHT = 30  # 行高
 
 # ========== 验证常量 ==========
 GROUP_ID_MIN_LENGTH = 5  # 群组ID最小长度
-GROUP_ID_MAX_LENGTH = 12  # 群组ID最大长度
+GROUP_ID_MAX_LENGTH = 32  # 群组ID最大长度
 USER_ID_MIN_LENGTH = 1  # 用户ID最小长度
 USER_ID_MAX_LENGTH = 20  # 用户ID最大长度
 NICKNAME_MAX_LENGTH = 50  # 昵称最大长度

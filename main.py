@@ -1,4 +1,4 @@
-"""
+﻿"""
 AstrBot 群发言统计插件
 统计群成员发言次数,生成排行榜
 """
@@ -9,7 +9,7 @@ import os
 import re
 import aiofiles
 from datetime import datetime, date, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 # 第三方库导入
 from cachetools import TTLCache
@@ -23,7 +23,7 @@ from astrbot.api import logger as astrbot_logger
 # 本地模块导入
 from .utils.data_manager import DataManager
 from .utils.image_generator import ImageGenerator, ImageGenerationError
-from .utils.validators import Validators
+from .utils.validators import Validators, ValidationError
 
 from .utils.models import (
     UserData, PluginConfig, GroupInfo, MessageDate, 
@@ -55,6 +55,8 @@ from .utils.constants import (
     USER_NICKNAME_CACHE_TTL,
     GROUP_MEMBERS_CACHE_TTL as CACHE_TTL_SECONDS
 )
+
+DEFAULT_KOOK_GUILD_ID = "8281529857959625"
 
 @register("astrbot_plugin_message_stats", "xiaoruange39", "群发言统计插件", "1.7.0")
 class MessageStatsPlugin(Star):
@@ -201,6 +203,34 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"收集群组unified_msg_origin失败: {e}")
         except (RuntimeError, OSError, IOError, ImportError, ValueError) as e:
             self.logger.error(f"收集群组unified_msg_origin失败(系统错误): {e}")
+
+    def _get_platform_name(self, event: AstrMessageEvent) -> Optional[str]:
+        platform_meta = getattr(event, 'platform_meta', None)
+        return getattr(platform_meta, 'name', None)
+
+    def _extract_kook_guild_id(self, event: AstrMessageEvent) -> Optional[str]:
+        message_obj = getattr(event, 'message_obj', None)
+        raw = getattr(message_obj, 'raw_message', None) if message_obj else None
+        if raw is None:
+            raw = getattr(event, 'raw_message', None)
+        if not isinstance(raw, dict):
+            return None
+        extra = raw.get('extra') or {}
+        return (
+            raw.get('guild_id')
+            or extra.get('guild_id')
+            or (extra.get('guild') or {}).get('id')
+        )
+
+    def _resolve_stats_group_id(self, event: AstrMessageEvent) -> Optional[str]:
+        platform_name = self._get_platform_name(event)
+        group_id = event.get_group_id()
+        if platform_name == "kook":
+            guild_id = self._extract_kook_guild_id(event)
+            if not guild_id and self.plugin_config and self.plugin_config.detailed_logging_enabled:
+                self.logger.debug("KOOK 未提供 guild_id，回退使用 channel_id 统计")
+            return str(guild_id) if guild_id else (str(group_id) if group_id else None)
+        return str(group_id) if group_id else None
     async def _cache_group_name(self, event: AstrMessageEvent, group_id: str):
         """获取并缓存群组名称
         
@@ -466,7 +496,7 @@ class MessageStatsPlugin(Star):
             return
         
         # 获取基本信息
-        group_id = event.get_group_id()
+        group_id = self._resolve_stats_group_id(event)
         user_id = event.get_sender_id()
         
         # 跳过非群聊或无效用户
@@ -488,12 +518,25 @@ class MessageStatsPlugin(Star):
         await self._collect_group_unified_msg_origin(event)
         
         # 获取用户昵称并记录统计
-        nickname = await self._get_user_display_name(event, group_id, user_id)
+        nickname_group_id = event.get_group_id() or group_id
+        nickname = await self._get_user_display_name(event, nickname_group_id, user_id)
         await self._record_message_stats(group_id, user_id, nickname)
     
     def _is_bot_message(self, event: AstrMessageEvent, user_id: str) -> bool:
         """检查是否为机器人消息"""
         try:
+            platform_name = self._get_platform_name(event)
+            if platform_name == "kook":
+                message_obj = getattr(event, 'message_obj', None)
+                raw = getattr(message_obj, 'raw_message', None) if message_obj else None
+                if raw is None:
+                    raw = getattr(event, 'raw_message', None)
+                if isinstance(raw, dict):
+                    bot_flag = ((raw.get('extra') or {}).get('author') or {}).get('bot')
+                    if bot_flag is True:
+                        return True
+                return False
+
             self_id = event.get_self_id()
             return self_id and user_id == str(self_id)
         except (AttributeError, KeyError, TypeError):
@@ -589,7 +632,7 @@ class MessageStatsPlugin(Star):
         
         return group_id, user_id, nickname
     
-    async def _process_message_stats(self, group_id: str, user_id: str, nickname: str):
+    async def _process_message_stats(self, group_id: str, user_id: str, nickname: str) -> bool:
         """处理消息统计和记录
         
         执行实际的消息统计更新操作，并记录结果日志。
@@ -638,6 +681,7 @@ class MessageStatsPlugin(Star):
                     self.logger.info(f"记录消息统计: {nickname}")
         else:
             self.logger.error(f"记录消息统计失败: {nickname}")
+        return success
     
     # ========== 排行榜命令 ==========
     
@@ -1185,6 +1229,10 @@ class MessageStatsPlugin(Star):
     
     async def _fetch_group_members_from_api(self, event: AstrMessageEvent, group_id: str) -> Optional[List[Dict[str, Any]]]:
         """从API获取群成员"""
+        if self._get_platform_name(event) == "kook":
+            return None
+        if not hasattr(event, 'bot'):
+            return None
         client = event.bot
         params = {"group_id": group_id}
         
@@ -1214,46 +1262,90 @@ class MessageStatsPlugin(Star):
         return None
 
     async def _get_group_name(self, event: AstrMessageEvent, group_id: str) -> str:
-        """获取群名称 - 改进版本"""
-        try:
-            # 首先尝试通过事件对象获取群组信息
-            group_data = await event.get_group(group_id)
-            if group_data:
-                # 简化群名获取逻辑，直接尝试常用属性
-                return getattr(group_data, 'group_name', None) or \
-                       getattr(group_data, 'name', None) or \
-                       getattr(group_data, 'title', None) or \
-                       getattr(group_data, 'group_title', None) or \
-                       f"群{group_id}"
-            
-            # 如果事件对象获取失败，尝试通过API获取
-            try:
-                if hasattr(event, 'bot') and hasattr(event.bot, 'api'):
-                    group_info = await event.bot.api.call_action('get_group_info', group_id=group_id)
-                    if group_info and isinstance(group_info, dict):
-                        group_name = group_info.get('group_name') or group_info.get('group_title') or group_info.get('name')
-                        if group_name:
-                            return str(group_name).strip()
-            except (ConnectionError, asyncio.TimeoutError, ValueError, TypeError, AttributeError) as api_error:
-                # 修复：替换过于宽泛的Exception为具体异常类型
-                self.logger.warning(f"通过API获取群组 {group_id} 名称失败: {api_error}")
-            
-            return f"群{group_id}"
-        except (AttributeError, KeyError, TypeError, OSError) as e:
-            self.logger.warning(f"获取群名称失败，使用默认名称: {e}")
-            return f"群{group_id}"
+        """获取群名称- 改进版本"""
+        return f"群{group_id}"
+
+    def _parse_rank_query(self, event: AstrMessageEvent) -> Tuple[Optional[str], Optional[str]]:
+        """解析排行榜查询参数。
+
+        支持:
+        - #发言榜 [群号]
+        - #发言榜 kook [群号]
+        - #发言榜 qq [群号]
+        - #发言榜 group_id=123
+        - #发言榜 kook_guild_id=123
+        """
+        message_str = getattr(event, 'message_str', '') or ''
+        tokens = message_str.split()
+        args = tokens[1:] if len(tokens) > 1 else []
+
+        if not args:
+            return None, None
+
+        platform_hint = None
+        target_group_id = None
+        first = args[0]
+        first_lower = first.lower()
+
+        if "=" in first:
+            key, value = first.split("=", 1)
+            key = key.lower().strip()
+            if key in ("group_id", "qq_group_id", "kook_group_id", "kook_guild_id", "guild_id"):
+                target_group_id = value.strip()
+                if key.startswith("kook"):
+                    platform_hint = "kook"
+                elif key.startswith("qq"):
+                    platform_hint = "qq"
+        elif first_lower in ("kook", "qq"):
+            platform_hint = first_lower
+            if len(args) > 1:
+                target_group_id = args[1].strip()
+        else:
+            target_group_id = first.strip()
+
+        return target_group_id, platform_hint
     
     async def _show_rank(self, event: AstrMessageEvent, rank_type: RankType):
         """显示排行榜 - 重构版本"""
         try:
+            target_group_id, platform_hint = self._parse_rank_query(event)
+            event_platform = self._get_platform_name(event)
+
+            if platform_hint and not target_group_id:
+                if platform_hint == "kook":
+                    target_group_id = DEFAULT_KOOK_GUILD_ID
+                elif event_platform and platform_hint == event_platform:
+                    target_group_id = self._resolve_stats_group_id(event)
+                else:
+                    yield event.plain_result("请提供目标群号，例如: #发言榜 kook 123456")
+                    return
+            
+            if not target_group_id:
+                target_group_id = self._resolve_stats_group_id(event)
+
+            if not target_group_id:
+                yield event.plain_result("无法获取群组信息，请在群聊中使用或指定群号")
+                return
+
+            try:
+                target_group_id = Validators.validate_group_id(target_group_id)
+            except ValidationError as e:
+                yield event.plain_result(f"群号格式错误: {e}")
+                return
+
             # 检查群聊是否在屏蔽列表中
-            group_id = event.get_group_id()
-            if group_id and self._is_blocked_group(str(group_id)):
+            if self._is_blocked_group(str(target_group_id)):
                 return
             
             # 准备数据
-            rank_data = await self._prepare_rank_data(event, rank_type)
+            rank_data = await self._prepare_rank_data(event, rank_type, target_group_id)
             if rank_data is None:
+                if platform_hint == "kook":
+                    all_groups = await self.data_manager.get_all_groups()
+                    self.logger.info(
+                        f"[KOOK][stats] no rank data for group_id={target_group_id}, "
+                        f"known_groups={all_groups}"
+                    )
                 yield event.plain_result("无法获取排行榜数据,请检查群组信息或稍后重试")
                 return
             
@@ -1286,10 +1378,10 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"数据格式错误: {e}")
             yield event.plain_result("数据格式错误,请联系管理员")
     
-    async def _prepare_rank_data(self, event: AstrMessageEvent, rank_type: RankType):
+    async def _prepare_rank_data(self, event: AstrMessageEvent, rank_type: RankType, target_group_id: Optional[str] = None):
         """准备排行榜数据"""
         # 获取群组ID和用户ID
-        group_id = event.get_group_id()
+        group_id = target_group_id or self._resolve_stats_group_id(event)
         current_user_id = event.get_sender_id()
         
         if not group_id:
@@ -1648,7 +1740,7 @@ class MessageStatsPlugin(Star):
         for i, (user, user_messages) in enumerate(top_users):
             # 使用时间段内的发言数计算百分比
             percentage = ((user_messages / total_messages) * 100) if total_messages > 0 else 0
-            msg.append(f"第{i + 1}名:{user.nickname}·{user_messages}次(占比{percentage:.2f}%)\n")
+            msg.append(f"{i + 1}-{user.nickname}·{user_messages}次({percentage:.2f}%)\n")
         
         return ''.join(msg)
     
