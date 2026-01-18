@@ -215,12 +215,42 @@ class MessageStatsPlugin(Star):
             raw = getattr(event, 'raw_message', None)
         if not isinstance(raw, dict):
             return None
-        extra = raw.get('extra') or {}
+        # 兼容部分适配器将 payload 包在 d 字段中
+        payload = raw.get('d') if isinstance(raw.get('d'), dict) else raw
+        extra = payload.get('extra') or {}
         return (
-            raw.get('guild_id')
+            payload.get('guild_id')
             or extra.get('guild_id')
             or (extra.get('guild') or {}).get('id')
         )
+
+    def _extract_kook_roles(self, event: AstrMessageEvent) -> List[int]:
+        """从 KOOK 原始消息中提取 author.roles（角色ID列表）。"""
+        message_obj = getattr(event, 'message_obj', None)
+        raw = getattr(message_obj, 'raw_message', None) if message_obj else None
+        if raw is None:
+            raw = getattr(event, 'raw_message', None)
+        if not isinstance(raw, dict):
+            return []
+
+        payload = raw.get('d') if isinstance(raw.get('d'), dict) else raw
+        extra = payload.get('extra') or {}
+        author = extra.get('author') or {}
+        roles = author.get('roles') or []
+
+        if isinstance(roles, (int, str)):
+            roles = [roles]
+        if not isinstance(roles, list):
+            return []
+
+        role_ids: List[int] = []
+        for r in roles:
+            try:
+                role_ids.append(int(r))
+            except (TypeError, ValueError):
+                continue
+
+        return sorted(set(role_ids))
 
     def _resolve_stats_group_id(self, event: AstrMessageEvent) -> Optional[str]:
         platform_name = self._get_platform_name(event)
@@ -520,7 +550,8 @@ class MessageStatsPlugin(Star):
         # 获取用户昵称并记录统计
         nickname_group_id = event.get_group_id() or group_id
         nickname = await self._get_user_display_name(event, nickname_group_id, user_id)
-        await self._record_message_stats(group_id, user_id, nickname)
+        roles = self._extract_kook_roles(event) if self._get_platform_name(event) == "kook" else None
+        await self._record_message_stats(group_id, user_id, nickname, roles=roles)
     
     def _is_bot_message(self, event: AstrMessageEvent, user_id: str) -> bool:
         """检查是否为机器人消息"""
@@ -542,7 +573,13 @@ class MessageStatsPlugin(Star):
         except (AttributeError, KeyError, TypeError):
             return False
     
-    async def _record_message_stats(self, group_id: str, user_id: str, nickname: str):
+    async def _record_message_stats(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        roles: Optional[List[int]] = None,
+    ):
         """记录消息统计
         
         内部方法,用于记录群成员的消息统计数据.会自动验证输入参数并更新数据.
@@ -581,7 +618,7 @@ class MessageStatsPlugin(Star):
             group_id, user_id, nickname = validated_data
             
             # 步骤3: 处理消息统计和记录
-            await self._process_message_stats(group_id, user_id, nickname)
+            await self._process_message_stats(group_id, user_id, nickname, roles=roles)
             
         except ValueError as e:
             self.logger.error(f"记录消息统计失败(参数验证错误): {e}", exc_info=True)
@@ -632,7 +669,13 @@ class MessageStatsPlugin(Star):
         
         return group_id, user_id, nickname
     
-    async def _process_message_stats(self, group_id: str, user_id: str, nickname: str) -> bool:
+    async def _process_message_stats(
+        self,
+        group_id: str,
+        user_id: str,
+        nickname: str,
+        roles: Optional[List[int]] = None,
+    ) -> bool:
         """处理消息统计和记录
         
         执行实际的消息统计更新操作，并记录结果日志。
@@ -660,7 +703,7 @@ class MessageStatsPlugin(Star):
             SystemError: 当系统错误时抛出
         """
         # 直接使用data_manager更新用户消息
-        success = await self.data_manager.update_user_message(group_id, user_id, nickname)
+        success = await self.data_manager.update_user_message(group_id, user_id, nickname, roles=roles)
         
         if success:
             # 智能缓存管理：检查昵称变化
@@ -673,12 +716,12 @@ class MessageStatsPlugin(Star):
                 
                 if self.plugin_config.detailed_logging_enabled:
                     self.logger.debug(f"昵称发生变化，更新缓存: {cached_nickname} -> {nickname}")
-                    self.logger.info(f"记录消息统计: {nickname}")
+                    self.logger.debug(f"记录消息统计: {nickname}")
             else:
                 # 昵称未变化，只记录基本日志
                 if self.plugin_config.detailed_logging_enabled:
                     self.logger.debug(f"昵称未变化，保持缓存: {nickname}")
-                    self.logger.info(f"记录消息统计: {nickname}")
+                    self.logger.debug(f"记录消息统计: {nickname}")
         else:
             self.logger.error(f"记录消息统计失败: {nickname}")
         return success
@@ -1265,51 +1308,79 @@ class MessageStatsPlugin(Star):
         """获取群名称- 改进版本"""
         return f"群{group_id}"
 
-    def _parse_rank_query(self, event: AstrMessageEvent) -> Tuple[Optional[str], Optional[str]]:
+    def _parse_roles_param(self, value: str) -> List[int]:
+        parts = [p.strip() for p in (value or "").split(",") if p.strip()]
+        roles: List[int] = []
+        for part in parts:
+            try:
+                roles.append(int(part))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(roles))
+
+    def _parse_rank_query(self, event: AstrMessageEvent) -> Tuple[Optional[str], Optional[str], Optional[List[int]]]:
         """解析排行榜查询参数。
 
         支持:
         - #发言榜 [群号]
-        - #发言榜 kook [群号]
+        - #发言榜 kook [群号] [roles=1,2]
         - #发言榜 qq [群号]
         - #发言榜 group_id=123
-        - #发言榜 kook_guild_id=123
+        - #发言榜 kook_guild_id=123 [roles=1,2]
+
+        注意:
+        - roles 参数仅允许在显式指定 kook（如 "kook" / "kook_guild_id="）时使用
+        - roles=40572151,123 表示“只要包含任一 role 就参与排行”
         """
         message_str = getattr(event, 'message_str', '') or ''
         tokens = message_str.split()
         args = tokens[1:] if len(tokens) > 1 else []
 
-        if not args:
-            return None, None
+        platform_hint: Optional[str] = None
+        target_group_id: Optional[str] = None
+        roles_filter: Optional[List[int]] = None
 
-        platform_hint = None
-        target_group_id = None
-        first = args[0]
-        first_lower = first.lower()
+        for arg in args:
+            if "=" in arg:
+                key, value = arg.split("=", 1)
+                key = key.lower().strip()
+                value = value.strip()
 
-        if "=" in first:
-            key, value = first.split("=", 1)
-            key = key.lower().strip()
-            if key in ("group_id", "qq_group_id", "kook_group_id", "kook_guild_id", "guild_id"):
-                target_group_id = value.strip()
-                if key.startswith("kook"):
-                    platform_hint = "kook"
-                elif key.startswith("qq"):
-                    platform_hint = "qq"
-        elif first_lower in ("kook", "qq"):
-            platform_hint = first_lower
-            if len(args) > 1:
-                target_group_id = args[1].strip()
-        else:
-            target_group_id = first.strip()
+                if key in ("group_id", "qq_group_id", "kook_group_id", "kook_guild_id", "guild_id"):
+                    target_group_id = value
+                    if key.startswith("kook") or key == "guild_id":
+                        platform_hint = "kook"
+                    elif key.startswith("qq"):
+                        platform_hint = "qq"
+                    continue
 
-        return target_group_id, platform_hint
+                if key == "roles":
+                    roles_filter = self._parse_roles_param(value)
+                    continue
+
+            lower = arg.lower().strip()
+            if lower in ("kook", "qq"):
+                platform_hint = lower
+                continue
+
+            if target_group_id is None:
+                target_group_id = arg.strip()
+
+        return target_group_id, platform_hint, roles_filter
     
     async def _show_rank(self, event: AstrMessageEvent, rank_type: RankType):
         """显示排行榜 - 重构版本"""
         try:
-            target_group_id, platform_hint = self._parse_rank_query(event)
+            target_group_id, platform_hint, roles_filter = self._parse_rank_query(event)
             event_platform = self._get_platform_name(event)
+
+            if roles_filter is not None:
+                if platform_hint != "kook":
+                    yield event.plain_result("roles 参数仅支持在 '#发言榜 kook ...' 查询下使用，例如: #发言榜 kook roles=40572151,123")
+                    return
+                if not roles_filter:
+                    yield event.plain_result("roles 参数格式错误，例如: roles=40572151,123")
+                    return
 
             if platform_hint and not target_group_id:
                 if platform_hint == "kook":
@@ -1338,7 +1409,7 @@ class MessageStatsPlugin(Star):
                 return
             
             # 准备数据
-            rank_data = await self._prepare_rank_data(event, rank_type, target_group_id)
+            rank_data = await self._prepare_rank_data(event, rank_type, target_group_id, roles_filter=roles_filter)
             if rank_data is None:
                 if platform_hint == "kook":
                     all_groups = await self.data_manager.get_all_groups()
@@ -1346,7 +1417,10 @@ class MessageStatsPlugin(Star):
                         f"[KOOK][stats] no rank data for group_id={target_group_id}, "
                         f"known_groups={all_groups}"
                     )
-                yield event.plain_result("无法获取排行榜数据,请检查群组信息或稍后重试")
+                if roles_filter is not None:
+                    yield event.plain_result("未找到符合 roles 条件的排行榜数据")
+                else:
+                    yield event.plain_result("无法获取排行榜数据,请检查群组信息或稍后重试")
                 return
             
             group_id, current_user_id, filtered_data, config, title, group_info = rank_data
@@ -1378,7 +1452,13 @@ class MessageStatsPlugin(Star):
             self.logger.error(f"数据格式错误: {e}")
             yield event.plain_result("数据格式错误,请联系管理员")
     
-    async def _prepare_rank_data(self, event: AstrMessageEvent, rank_type: RankType, target_group_id: Optional[str] = None):
+    async def _prepare_rank_data(
+        self,
+        event: AstrMessageEvent,
+        rank_type: RankType,
+        target_group_id: Optional[str] = None,
+        roles_filter: Optional[List[int]] = None,
+    ):
         """准备排行榜数据"""
         # 获取群组ID和用户ID
         group_id = target_group_id or self._resolve_stats_group_id(event)
@@ -1398,6 +1478,11 @@ class MessageStatsPlugin(Star):
         
         if not group_data:
             return None
+
+        if roles_filter:
+            group_data = [u for u in group_data if any(r in getattr(u, "roles", []) for r in roles_filter)]
+            if not group_data:
+                return None
         
         # 显示排行榜前强制刷新昵称缓存，确保昵称准确性
         await self._refresh_nickname_cache_for_ranking(event, group_id, group_data)

@@ -204,6 +204,8 @@ class UserData:
     last_date: Optional[str] = None
     first_message_time: Optional[int] = None
     last_message_time: Optional[int] = None
+    # KOOK 平台角色ID列表（非 KOOK 平台通常为空）
+    roles: List[int] = field(default_factory=list)
     
     def add_message(self, message_date: MessageDate):
         """添加消息记录
@@ -321,7 +323,8 @@ class UserData:
             "history": self.history,
             "last_date": self.last_date,
             "first_message_time": self.first_message_time,
-            "last_message_time": self.last_message_time
+            "last_message_time": self.last_message_time,
+            "roles": self.roles
         }
     
     @classmethod
@@ -352,7 +355,8 @@ class UserData:
             message_count=data.get("message_count", 0),
             last_date=data.get("last_date"),
             first_message_time=data.get("first_message_time"),
-            last_message_time=data.get("last_message_time")
+            last_message_time=data.get("last_message_time"),
+            roles=_parse_roles(data.get("roles"))
         )
         
         # 重建history（兼容旧版列表格式）
@@ -382,6 +386,24 @@ class UserData:
                 logger.warning(f"history字段类型错误，不是dict或list: {type(history_data)}")
         
         return user_data
+
+
+def _parse_roles(raw_roles: Any) -> List[int]:
+    """解析 roles 字段为 int 列表（兼容缺失/字符串/混合输入）。"""
+    if raw_roles is None:
+        return []
+    if isinstance(raw_roles, (int, str)):
+        raw_roles = [raw_roles]
+    if not isinstance(raw_roles, list):
+        return []
+    roles: List[int] = []
+    for item in raw_roles:
+        try:
+            roles.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    # 去重并排序，便于稳定存储/对比
+    return sorted(set(roles))
     
     def __lt__(self, other) -> bool:
         """按总消息数排序"""

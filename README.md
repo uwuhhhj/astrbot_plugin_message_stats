@@ -19,6 +19,15 @@ cd /AstrBot/data/plugins/
 git clone https://github.com/xiaoruange39/astrbot_plugin_message_stats.git
 ```
 
+### KOOK roles 参数（按角色筛选）
+
+仅在显式指定 `kook` 的查询中支持 `roles=` 参数，例如：
+
+- `#发言榜 kook roles=40572151,123`
+- `#今日发言榜 kook roles=40572151,123`
+
+规则：用户的 `roles` **只要包含任意一个**指定 role_id，即可参与排行。
+
 ## 📖 使用方法
 
 ### 基础命令
