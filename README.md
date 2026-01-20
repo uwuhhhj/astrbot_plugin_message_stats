@@ -42,7 +42,7 @@ git clone https://github.com/xiaoruange39/astrbot_plugin_message_stats.git
 
 排行榜命令支持可选参数：
 `#发言榜 123456`、`#发言榜 qq 123456`、`#发言榜 kook 123456`、`#发言榜 group_id=123456`、`#发言榜 qq_group_id=123456`、`#发言榜 kook_group_id=123456`、`#发言榜 kook_guild_id=123456`、`#发言榜 guild_id=123456`
-
+`#发言榜 kook roles=40572151,123`
 KOOK 平台默认按 guild_id 统计（汇总该服务器下的所有频道）。
 
 #### 管理命令
